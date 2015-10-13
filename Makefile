@@ -4,6 +4,9 @@ APP=avcut
 CFLAGS+=-Wall
 LDLIBS=-lavcodec -lavformat -lavutil
 
+## enable support for libav (EXPERIMENTAL)
+#CFLAGS=-DUSING_LIBAV
+
 .PHONY: clean
 
 all: $(APP)
