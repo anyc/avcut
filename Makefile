@@ -2,7 +2,7 @@
 APP=avcut
 
 CFLAGS+=-Wall
-LDLIBS=-lavcodec -lavformat -lavutil -lavfilter
+LDLIBS=-lavcodec -lavformat -lavutil
 
 .PHONY: clean
 

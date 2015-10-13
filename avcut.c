@@ -59,10 +59,6 @@ void dumpframe(AVFrame *frame) {
 	fclose(pFile);
 }
 
-void dump_avrational(AVRational *r) {
-	av_log(NULL, AV_LOG_DEBUG, "%5d / %5d\n", r->num, r->den);
-}
-
 // encode a frame and write the resulting packet into the output file
 int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *frame, int *got_frame_p) {
 	AVPacket *out_pkt;
@@ -97,7 +93,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		s->next_dts += enc_pkt.duration;
 		
 		// if we have a global header, also copy the header to the beginning of each key frame
-		if (codec->extradata) {
+		if (codec->extradata && enc_pkt.flags & AV_PKT_FLAG_KEY) {
 			uint8_t *data;
 			int size = enc_pkt.size + codec->extradata_size;
 			
@@ -129,7 +125,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		av_frame_free(&frame);
 		
 		av_free_packet(&enc_pkt);
-		if (codec->extradata)
+		if (codec->extradata && enc_pkt.flags & AV_PKT_FLAG_KEY)
 			av_free_packet(&npkt);
 	}
 	
@@ -276,6 +272,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 		if (!copy_complete_buffer)
 			av_free_packet(&s->pkts[i]);
 	}
+	
+	// TODO: check if we can simply cut if the last frame is a P-frame
 	
 	if (!copy_complete_buffer) {
 		char frame_written = 0;
