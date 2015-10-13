@@ -20,6 +20,34 @@ _Please note:_
 * You can specify an arbitrary output container that is supported by ffmpeg.
   However, avcut has only been tested with the Matroska (.mkv) container.
 
+Dependencies
+------------
+
+* [ffmpeg](https://www.ffmpeg.org/)
+
+avcut also compiles with [libav](https://libav.org/) if you enable the flag in
+the Makefile but it has not been tested much.
+
+Compilation
+-----------
+
+Install dependencies:
+
+* For Ubuntu versions with libav as default, e.g., 15.04:
+
+  * `apt-get install libavcodec-ffmpeg-dev libavformat-ffmpeg-dev libavutil-ffmpeg-dev`
+
+* For Ubuntu with ffmpeg:
+
+  * `apt-get install libavcodec-dev libavformat-dev libavutil-dev`
+
+* Gentoo:
+
+  * emerge media-video/ffmpeg
+
+Execute `make` to start building avcut. Execute `make debug` to build avcut with
+verbose output and debug symbols.
+
 Usage
 -----
 
