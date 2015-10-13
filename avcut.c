@@ -69,7 +69,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 	
 	
 	if (frame)
-		av_log(NULL, AV_LOG_DEBUG, "enc frame pts: %ld pkt_pts: %ld pkt_dts: %ld type: %c\n",
+		av_log(NULL, AV_LOG_DEBUG, "enc frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " type: %c\n",
 			frame->pts, frame->pkt_pts, frame->pkt_dts, av_get_picture_type_char(frame->pict_type));
 	
 	av_init_packet(&enc_pkt);
@@ -113,7 +113,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 			out_pkt = &enc_pkt;
 		}
 		
-		av_log(NULL, AV_LOG_DEBUG, "write v enc size: %d pts: %ld dts: %ld - to %f\n", out_pkt->size, out_pkt->pts, out_pkt->dts,
+		av_log(NULL, AV_LOG_DEBUG, "write v enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n", out_pkt->size, out_pkt->pts, out_pkt->dts,
 			out_pkt->pts*ostream->time_base.num/(double)ostream->time_base.den);
 		
 		ret = av_interleaved_write_frame(pr->out_fctx, out_pkt);
@@ -235,7 +235,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 				s->pkts[i].dts = s->next_dts;
 				s->next_dts += s->pkts[i].duration;
 				
-				av_log(NULL, AV_LOG_DEBUG, "write a cpy pts: %ld dts: %ld - %f to %f\n", s->pkts[i].pts, s->pkts[i].dts,
+				av_log(NULL, AV_LOG_DEBUG, "write a cpy pts: %" PRId64 " dts: %" PRId64 " - %f to %f\n", s->pkts[i].pts, s->pkts[i].dts,
 					ts, s->pkts[i].pts * av_q2d(pr->out_fctx->streams[s->stream_index]->time_base));
 				
 				ret = av_interleaved_write_frame(pr->out_fctx, &s->pkts[i]);
@@ -263,7 +263,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 	for (i=0;i<s->n_pkts;i++) {
 		if (s->pkts[i].dts == s->frames[s->n_frames-1]->coded_picture_number) {
 			if (s->frames[s->n_frames-1]->pkt_size != s->pkts[i].size) {
-				av_log(NULL, AV_LOG_ERROR, "size mismatch %ld:%d %ld:%d\n", s->n_frames-1, s->frames[s->n_frames-1]->pkt_size, i, s->pkts[i].size);
+				av_log(NULL, AV_LOG_ERROR, "size mismatch %" PRId64 ":%d %" PRId64 ":%d\n", s->n_frames-1, s->frames[s->n_frames-1]->pkt_size, i, s->pkts[i].size);
 				exit(1);
 			}
 			inter_pkt = i;
@@ -355,7 +355,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 			for (j=0;j<s->n_frames;j++) {
 				if (s->pkts[i].dts == s->frames[j]->coded_picture_number) {
 					if (s->frames[j]->pkt_size != s->pkts[i].size) {
-						av_log(NULL, AV_LOG_ERROR, "size mismatch %ld:%d %ld:%d (dts %ld)\n", j, s->frames[j]->pkt_size, i, s->pkts[i].size, s->pkts[i].dts);
+						av_log(NULL, AV_LOG_ERROR, "size mismatch %" PRId64 ":%d %" PRId64 ":%d (dts %" PRId64 ")\n", j, s->frames[j]->pkt_size, i, s->pkts[i].size, s->pkts[i].dts);
 						exit(1);
 					}
 					
@@ -385,7 +385,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 				s->pkts[i].dts = s->next_dts;
 				s->next_dts += s->pkts[i].duration;
 				
-				av_log(NULL, AV_LOG_DEBUG, "write v cpy size: %d pts: %ld dts: %ld - %f to %f\n", s->pkts[i].size, s->pkts[i].pts, s->pkts[i].dts,
+				av_log(NULL, AV_LOG_DEBUG, "write v cpy size: %d pts: %" PRId64 " dts: %" PRId64 " - %f to %f\n", s->pkts[i].size, s->pkts[i].pts, s->pkts[i].dts,
 						ts, s->pkts[i].pts * pr->out_fctx->streams[s->stream_index]->time_base.num /
 							(double)pr->out_fctx->streams[s->stream_index]->time_base.den
 						);
