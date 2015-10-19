@@ -25,6 +25,8 @@
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 
+AVBitStreamFilterContext *bsf_dump_extra;
+
 // buffer management struct for a stream
 struct packet_buffer {
 	unsigned int stream_index;
@@ -72,7 +74,6 @@ void dumpframe(AVFrame *frame) {
 // encode a frame and write the resulting packet into the output file
 int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *frame, int *got_frame_p) {
 	AVPacket *out_pkt;
-	AVPacket npkt;
 	AVPacket enc_pkt = { .data = NULL, .size = 0 };
 	int got_frame, ret;
 	AVStream *ostream = pr->out_fctx->streams[s->stream_index];
@@ -102,26 +103,11 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		enc_pkt.dts = s->next_dts;
 		s->next_dts += enc_pkt.duration;
 		
-		// if we have a global header, also copy the header to the beginning of each key frame
-		if (codec->extradata && enc_pkt.flags & AV_PKT_FLAG_KEY) {
-			uint8_t *data;
-			int size = enc_pkt.size + codec->extradata_size;
-			
-			npkt = enc_pkt;
-			
-			data = av_malloc(size + FF_INPUT_BUFFER_PADDING_SIZE);
-			if (!data)
-				return AVERROR(ENOMEM);
-			
-			memcpy(data, codec->extradata, codec->extradata_size);
-			memcpy(data + codec->extradata_size, enc_pkt.data, enc_pkt.size + FF_INPUT_BUFFER_PADDING_SIZE);
-			
-			av_packet_from_data(&npkt, data, size);
-			
-			out_pkt = &npkt;
-		} else {
-			out_pkt = &enc_pkt;
-		}
+		out_pkt = &enc_pkt;
+		
+		// copy the header to the beginning of each key frame if we use a global header
+		if (codec->flags & CODEC_FLAG_GLOBAL_HEADER)
+			av_bitstream_filter_filter(bsf_dump_extra, codec, NULL, &out_pkt->data, &out_pkt->size, out_pkt->data, out_pkt->size, out_pkt->flags & AV_PKT_FLAG_KEY);
 		
 		av_log(NULL, AV_LOG_DEBUG, "write v enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n", out_pkt->size, out_pkt->pts, out_pkt->dts,
 			out_pkt->pts*ostream->time_base.num/(double)ostream->time_base.den);
@@ -133,10 +119,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		}
 		
 		av_frame_free(&frame);
-		
 		av_free_packet(&enc_pkt);
-		if (codec->extradata && enc_pkt.flags & AV_PKT_FLAG_KEY)
-			av_free_packet(&npkt);
 	}
 	
 	if (got_frame_p)
@@ -212,6 +195,8 @@ double get_n_dropped_pkgs_at_ts(struct project *pr, struct packet_buffer *s, dou
 		}
 	}
 	
+	av_log(NULL, AV_LOG_DEBUG, "dropped frames at %f: %f\n", ts, result);
+	
 	return result;
 }
 
@@ -269,9 +254,13 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 	// check if we can copy the complete buffer or if we have to check each packet individually
 	copy_complete_buffer = is_buffer_uncut(pr, s, s->n_frames-2);
 	
+	inter_pkt = s->n_pkts;
 	// get packet with second (and therefore last) inter frame
 	for (i=0;i<s->n_pkts;i++) {
-		if (s->pkts[i].dts == s->frames[s->n_frames-1]->coded_picture_number) {
+		// we cannot compare packet.dts with frame.pkt_dts as they differ by 2 (maybe caused by multithreading)
+		if ((s->pkts[i].pts != AV_NOPTS_VALUE && s->pkts[i].pts == s->frames[s->n_frames-1]->pkt_pts) ||
+			(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == s->frames[s->n_frames-1]->coded_picture_number))
+		{
 			#ifndef USING_LIBAV
 			// libav is missing pkt_size
 			if (s->frames[s->n_frames-1]->pkt_size != s->pkts[i].size) {
@@ -284,6 +273,10 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 		}
 		if (!copy_complete_buffer)
 			av_free_packet(&s->pkts[i]);
+	}
+	if (inter_pkt == s->n_pkts) {
+		av_log(NULL, AV_LOG_ERROR, "packet for second I frame (cpn %d) not found\n", s->frames[s->n_frames-1]->coded_picture_number);
+		exit(1);
 	}
 	
 	// TODO: check if we can simply cut if the last frame is a P-frame
@@ -364,10 +357,10 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 		if (frame_written) {
 			// Some encoders do not like new frames after we flushed them.
 			// Hence, we restart the encoder.
+			AVCodecContext *out_cctx = pr->out_fctx->streams[s->stream_index]->codec;
 			
-			AVCodecContext * cctx = pr->out_fctx->streams[s->stream_index]->codec;
-			cctx->codec->close(cctx);
-			cctx->codec->init(cctx);
+			out_cctx->codec->close(out_cctx);
+			out_cctx->codec->init(out_cctx);
 		}
 	} else {
 		for (i=0;i<inter_pkt;i++) {
@@ -376,7 +369,9 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 			// find frame for current packet to determine the PTS
 			frame = 0;
 			for (j=0;j<s->n_frames;j++) {
-				if (s->pkts[i].dts == s->frames[j]->coded_picture_number) {
+				if ((s->pkts[i].pts != AV_NOPTS_VALUE && s->pkts[i].pts == s->frames[j]->pkt_pts) ||
+					(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == s->frames[j]->coded_picture_number))
+				{
 					#ifndef USING_LIBAV
 					// libav is missing pkt_size
 					if (s->frames[j]->pkt_size != s->pkts[i].size) {
@@ -618,6 +613,9 @@ int main(int argc, char **argv) {
 		
 		out_stream->time_base = pr->in_fctx->streams[i]->time_base;
 		
+		// copy stream metadata
+		av_dict_copy(&out_stream->metadata, pr->in_fctx->streams[i]->metadata, 0);
+		
 		if (dec_cctx->codec_type == AVMEDIA_TYPE_VIDEO) {
 			AVCodec *encoder;
 			
@@ -645,7 +643,7 @@ int main(int argc, char **argv) {
 			out_stream->sample_aspect_ratio = pr->in_fctx->streams[i]->sample_aspect_ratio;
 			
 			if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
-				enc_cctx->flags |= CODEC_FLAG_GLOBAL_HEADER; // | AV_CODEC_FLAG_LOCAL_HEADER;
+				enc_cctx->flags |= CODEC_FLAG_GLOBAL_HEADER;
 			
 			ret = avcodec_open2(enc_cctx, encoder, NULL);
 			if (ret < 0) {
@@ -667,6 +665,12 @@ int main(int argc, char **argv) {
 		}
 	}
 	
+	bsf_dump_extra = av_bitstream_filter_init("dump_extra");
+	if (!bsf_dump_extra) {
+		av_log(NULL, AV_LOG_ERROR, "bitstream filter \"dump_extra\" not found");
+		exit(1);
+	}
+	
 	if (!(pr->out_fctx->oformat->flags & AVFMT_NOFILE)) {
 		ret = avio_open(&pr->out_fctx->pb, outputf, AVIO_FLAG_WRITE);
 		if (ret < 0) {
@@ -675,7 +679,7 @@ int main(int argc, char **argv) {
 		}
 	}
 	
-	// copy metadata
+	// copy main metadata
 	av_dict_copy(&pr->out_fctx->metadata, pr->in_fctx->metadata, 0);
 	
 	ret = avformat_write_header(pr->out_fctx, NULL);
@@ -780,6 +784,8 @@ int main(int argc, char **argv) {
 	 * cleanup
 	 */
 	
+	av_bitstream_filter_close(bsf_dump_extra);
+	
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
 		free(sbuffer[i].pkts);
 		free(sbuffer[i].frames);
@@ -787,9 +793,8 @@ int main(int argc, char **argv) {
 		if (avcodec_is_open(pr->in_fctx->streams[i]->codec))
 			avcodec_close(pr->in_fctx->streams[i]->codec);
 		
-		if (i < pr->out_fctx->nb_streams && pr->out_fctx->streams[i]->codec && avcodec_is_open(pr->out_fctx->streams[i]->codec)) {
+		if (i < pr->out_fctx->nb_streams && pr->out_fctx->streams[i]->codec && avcodec_is_open(pr->out_fctx->streams[i]->codec))
 			avcodec_close(pr->out_fctx->streams[i]->codec);
-		}
 	}
 	
 	avformat_close_input(&pr->in_fctx);
