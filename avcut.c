@@ -25,6 +25,9 @@
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 
+#define AVCUT_DUMP_CHAR(var, length) { size_t i; for (i=0; i<(length); i++) { printf("%x ", ((char*) (var))[i]); } printf("\n"); }
+
+AVBitStreamFilterContext *h264bsf;
 AVBitStreamFilterContext *bsf_dump_extra;
 
 // buffer management struct for a stream
@@ -49,6 +52,10 @@ struct project {
 	
 	double *cuts; // [ first_excluded_frame, first_included_frame, ...]
 	size_t n_cuts;
+};
+
+struct codeccontext {
+	char h264_annexb_format;
 };
 
 // debug function that dumps a frame into a PPM file
@@ -406,6 +413,12 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 				s->pkts[i].dts = s->next_dts;
 				s->next_dts += s->pkts[i].duration;
 				
+				if (!pr->in_fctx->streams[s->stream_index]->codec->opaque ||
+					!((struct codeccontext*) pr->in_fctx->streams[s->stream_index]->codec->opaque)->h264_annexb_format)
+				{
+					av_bitstream_filter_filter(h264bsf, pr->in_fctx->streams[s->stream_index]->codec, NULL, &s->pkts[i].data, &s->pkts[i].size, s->pkts[i].data, s->pkts[i].size, s->pkts[i].flags & AV_PKT_FLAG_KEY);
+				}
+				
 				av_log(NULL, AV_LOG_DEBUG, "write v cpy size: %d pts: %" PRId64 " dts: %" PRId64 " - %f to %f\n", s->pkts[i].size, s->pkts[i].pts, s->pkts[i].dts,
 						ts, s->pkts[i].pts * pr->out_fctx->streams[s->stream_index]->time_base.num /
 							(double)pr->out_fctx->streams[s->stream_index]->time_base.den
@@ -568,6 +581,31 @@ int main(int argc, char **argv) {
 				av_log(NULL, AV_LOG_ERROR, "Failed to open decoder for stream %u, error %d\n", i, ret);
 				return ret;
 			}
+			
+			if (codec_ctx->codec_id == CODEC_ID_H264 && codec_ctx->extradata_size > 2) {
+				char nalu_start_code1[] = {0x0,0x0,0x1};
+				char nalu_start_code2[] = {0x0,0x0,0x0,0x1};
+				
+				// AVCUT_DUMP_CHAR(codec_ctx->extradata, 4);
+				
+				if (!memcmp(codec_ctx->extradata, nalu_start_code1, 3) ||
+					!memcmp(codec_ctx->extradata, nalu_start_code2, 4))
+				{
+					struct codeccontext *cctx;
+					cctx = av_malloc(sizeof(struct codeccontext));
+					if (!cctx) {
+						av_log(NULL, AV_LOG_ERROR, "malloc codeccontext failed\n");
+						return AVERROR_UNKNOWN;
+					}
+					
+					cctx->h264_annexb_format = 1;
+					codec_ctx->opaque = cctx;
+					
+					av_log(NULL, AV_LOG_DEBUG, "h264 in annexb format\n");
+				} else {
+					av_log(NULL, AV_LOG_DEBUG, "h264 in avcc format\n");
+				}
+			}
 		}
 	}
 	
@@ -639,6 +677,7 @@ int main(int argc, char **argv) {
 // 			enc_cctx->keyint_min = 200;
 // 			enc_cctx->gop_size = 250;
 			enc_cctx->thread_count = 1; // spawning more threads causes avcodec_close to free threads multiple times
+			enc_cctx->codec_tag = 0;
 			
 			out_stream->sample_aspect_ratio = pr->in_fctx->streams[i]->sample_aspect_ratio;
 			
@@ -660,11 +699,14 @@ int main(int argc, char **argv) {
 				return ret;
 			}
 			
+			enc_cctx->codec_tag = 0;
+			
 			if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
 				enc_cctx->flags |= CODEC_FLAG_GLOBAL_HEADER;
 		}
 	}
 	
+	h264bsf = av_bitstream_filter_init("h264_mp4toannexb");
 	bsf_dump_extra = av_bitstream_filter_init("dump_extra");
 	if (!bsf_dump_extra) {
 		av_log(NULL, AV_LOG_ERROR, "bitstream filter \"dump_extra\" not found");
@@ -706,7 +748,7 @@ int main(int argc, char **argv) {
 	
 	
 	struct packet_buffer *sbuffer;
-	sbuffer = (struct packet_buffer*) calloc(1, sizeof(struct packet_buffer) * pr->in_fctx->nb_streams);
+	sbuffer = (struct packet_buffer*) av_calloc(1, sizeof(struct packet_buffer) * pr->in_fctx->nb_streams);
 	
 	// determine a safe starting value for the DTS from the GOP size
 	long dts_offset = 0;
@@ -744,8 +786,8 @@ int main(int argc, char **argv) {
 			if (sbuffer[stream_index].pkts == 0)
 				sbuffer[stream_index].length = 4;
 			sbuffer[stream_index].length *= 2;
-			sbuffer[stream_index].pkts = (AVPacket*) realloc(sbuffer[stream_index].pkts, sizeof(AVPacket)*sbuffer[stream_index].length);
-			sbuffer[stream_index].frames = (AVFrame**) realloc(sbuffer[stream_index].frames, sizeof(AVFrame*)*sbuffer[stream_index].length);
+			sbuffer[stream_index].pkts = (AVPacket*) av_realloc(sbuffer[stream_index].pkts, sizeof(AVPacket)*sbuffer[stream_index].length);
+			sbuffer[stream_index].frames = (AVFrame**) av_realloc(sbuffer[stream_index].frames, sizeof(AVFrame*)*sbuffer[stream_index].length);
 			sbuffer[stream_index].stream_index = stream_index;
 		}
 		
@@ -787,11 +829,14 @@ int main(int argc, char **argv) {
 	av_bitstream_filter_close(bsf_dump_extra);
 	
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
-		free(sbuffer[i].pkts);
-		free(sbuffer[i].frames);
+		av_freep(&sbuffer[i].pkts);
+		av_freep(&sbuffer[i].frames);
 		
-		if (avcodec_is_open(pr->in_fctx->streams[i]->codec))
-			avcodec_close(pr->in_fctx->streams[i]->codec);
+		if (pr->in_fctx->streams[i]->codec) {
+			av_freep(&pr->in_fctx->streams[i]->codec->opaque);
+			if (avcodec_is_open(pr->in_fctx->streams[i]->codec))
+				avcodec_close(pr->in_fctx->streams[i]->codec);
+		}
 		
 		if (i < pr->out_fctx->nb_streams && pr->out_fctx->streams[i]->codec && avcodec_is_open(pr->out_fctx->streams[i]->codec))
 			avcodec_close(pr->out_fctx->streams[i]->codec);
@@ -812,8 +857,8 @@ int main(int argc, char **argv) {
 	}
 	av_log(NULL, AV_LOG_INFO, "\n");
 	
-	free(pr->cuts);
-	free(sbuffer);
+	av_freep(&pr->cuts);
+	av_freep(&sbuffer);
 	
 	return 0;
 }
