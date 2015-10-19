@@ -27,7 +27,7 @@
 
 #define AVCUT_DUMP_CHAR(var, length) { size_t i; for (i=0; i<(length); i++) { printf("%x ", ((char*) (var))[i]); } printf("\n"); }
 
-AVBitStreamFilterContext *h264bsf;
+AVBitStreamFilterContext *bsf_h264_to_annexb;
 AVBitStreamFilterContext *bsf_dump_extra;
 
 // buffer management struct for a stream
@@ -54,33 +54,14 @@ struct project {
 	size_t n_cuts;
 };
 
+// private data avcut may store with each AVCodecContext
 struct codeccontext {
-	char h264_annexb_format;
+	char h264_annexb_format; // flag: h264 stream with annexb = 1, or avcc = 0
 };
 
-// debug function that dumps a frame into a PPM file
-// TODO: does not work reliably
-void dumpframe(AVFrame *frame) {
-	FILE *pFile;
-	char szFilename[32];
-	int  y;
-	
-	sprintf(szFilename, "frame%d.ppm", frame->coded_picture_number);
-	pFile=fopen(szFilename, "wb");
-	if(pFile==NULL)
-		return;
-	
-	fprintf(pFile, "P6\n%d %d\n255\n", frame->width, frame->height);
-	
-	for(y=0; y<frame->height; y++)
-		fwrite(frame->data[0]+y*frame->linesize[0], 1, frame->width*3, pFile);
-	
-	fclose(pFile);
-}
 
 // encode a frame and write the resulting packet into the output file
 int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *frame, int *got_frame_p) {
-	AVPacket *out_pkt;
 	AVPacket enc_pkt = { .data = NULL, .size = 0 };
 	int got_frame, ret;
 	AVStream *ostream = pr->out_fctx->streams[s->stream_index];
@@ -99,27 +80,27 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 	}
 	
 	if (got_frame) {
-		AVCodecContext *codec = pr->out_fctx->streams[s->stream_index]->codec;
-		
+		enc_pkt.stream_index = s->stream_index;
 		if (enc_pkt.duration == 0)
 			enc_pkt.duration = ostream->codec->ticks_per_frame;
-		enc_pkt.stream_index = s->stream_index;
 		
 		av_packet_rescale_ts(&enc_pkt, ostream->codec->time_base, ostream->time_base);
 		
 		enc_pkt.dts = s->next_dts;
 		s->next_dts += enc_pkt.duration;
 		
-		out_pkt = &enc_pkt;
-		
 		// copy the header to the beginning of each key frame if we use a global header
-		if (codec->flags & CODEC_FLAG_GLOBAL_HEADER)
-			av_bitstream_filter_filter(bsf_dump_extra, codec, NULL, &out_pkt->data, &out_pkt->size, out_pkt->data, out_pkt->size, out_pkt->flags & AV_PKT_FLAG_KEY);
+		if (ostream->codec->flags & CODEC_FLAG_GLOBAL_HEADER)
+			av_bitstream_filter_filter(bsf_dump_extra, ostream->codec, NULL,
+				&enc_pkt.data, &enc_pkt.size, enc_pkt.data, enc_pkt.size,
+				enc_pkt.flags & AV_PKT_FLAG_KEY);
 		
-		av_log(NULL, AV_LOG_DEBUG, "write v enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n", out_pkt->size, out_pkt->pts, out_pkt->dts,
-			out_pkt->pts*ostream->time_base.num/(double)ostream->time_base.den);
+		av_log(NULL, AV_LOG_DEBUG,
+			"write v enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n",
+			enc_pkt.size, enc_pkt.pts, enc_pkt.dts,
+			enc_pkt.pts*ostream->time_base.num/(double)ostream->time_base.den);
 		
-		ret = av_interleaved_write_frame(pr->out_fctx, out_pkt);
+		ret = av_interleaved_write_frame(pr->out_fctx, &enc_pkt);
 		if (ret < 0) {
 			av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
 			return ret;
@@ -237,8 +218,10 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 				s->pkts[i].dts = s->next_dts;
 				s->next_dts += s->pkts[i].duration;
 				
-				av_log(NULL, AV_LOG_DEBUG, "write a cpy pts: %" PRId64 " dts: %" PRId64 " - %f to %f\n", s->pkts[i].pts, s->pkts[i].dts,
-					ts, s->pkts[i].pts * av_q2d(pr->out_fctx->streams[s->stream_index]->time_base));
+				av_log(NULL, AV_LOG_DEBUG,
+					"write a cpy pts: %" PRId64 " dts: %" PRId64 " - %f to %f\n",
+					s->pkts[i].pts, s->pkts[i].dts, ts,
+					s->pkts[i].pts * av_q2d(pr->out_fctx->streams[s->stream_index]->time_base));
 				
 				ret = av_interleaved_write_frame(pr->out_fctx, &s->pkts[i]);
 				if (ret < 0) {
@@ -271,7 +254,10 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 			#ifndef USING_LIBAV
 			// libav is missing pkt_size
 			if (s->frames[s->n_frames-1]->pkt_size != s->pkts[i].size) {
-				av_log(NULL, AV_LOG_ERROR, "size mismatch %" PRId64 ":%d %" PRId64 ":%d\n", s->n_frames-1, s->frames[s->n_frames-1]->pkt_size, i, s->pkts[i].size);
+				av_log(NULL, AV_LOG_ERROR,
+					"size mismatch %" PRId64 ":%d %" PRId64 ":%d\n",
+					s->n_frames-1, s->frames[s->n_frames-1]->pkt_size, i,
+					s->pkts[i].size);
 				exit(1);
 			}
 			#endif
@@ -282,7 +268,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 			av_free_packet(&s->pkts[i]);
 	}
 	if (inter_pkt == s->n_pkts) {
-		av_log(NULL, AV_LOG_ERROR, "packet for second I frame (cpn %d) not found\n", s->frames[s->n_frames-1]->coded_picture_number);
+		av_log(NULL, AV_LOG_ERROR, "packet for second I frame (cpn %d) not found\n",
+			s->frames[s->n_frames-1]->coded_picture_number);
 		exit(1);
 	}
 	
@@ -304,24 +291,19 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 			if (last_frame_dropped)
 				offset = get_n_dropped_pkgs_at_ts(pr, s, ts);
 			
-			s->frames[i]->pts -= av_rescale_q(offset, pr->in_fctx->streams[s->stream_index]->time_base, pr->in_fctx->streams[s->stream_index]->codec->time_base);
+			s->frames[i]->pts -= av_rescale_q(offset,
+					pr->in_fctx->streams[s->stream_index]->time_base,
+					pr->in_fctx->streams[s->stream_index]->codec->time_base);
 			
 			if (ts_included(pr, ts)) {
 				if (last_frame_dropped)
 					av_log(NULL, AV_LOG_DEBUG, "new PTS offset %f\n", offset);
 				
-				// force last to-be-written frame to be an I-frame
-				// this frame is the last if next frame is not included anymore
-// 				if (last_frame_dropped || (i+1 < s->n_frames-1 && !ts_included(pr, frame_pts2ts(pr, s, s->frames[i+1]))) ) {
-// 					s->frames[i]->pict_type = AV_PICTURE_TYPE_I;
-// 					s->frames[i]->key_frame = 1;
-// 				} else {
-					#ifndef USING_LIBAV
-					s->frames[i]->pict_type = AV_PICTURE_TYPE_NONE;
-					#else
-					s->frames[i]->pict_type = 0;
-					#endif
-// 				}
+				#ifndef USING_LIBAV
+				s->frames[i]->pict_type = AV_PICTURE_TYPE_NONE;
+				#else
+				s->frames[i]->pict_type = 0;
+				#endif
 				
 				ret = encode_write_frame(pr, s, s->frames[i], 0);
 				if (ret < 0) {
@@ -382,7 +364,9 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 					#ifndef USING_LIBAV
 					// libav is missing pkt_size
 					if (s->frames[j]->pkt_size != s->pkts[i].size) {
-						av_log(NULL, AV_LOG_ERROR, "size mismatch %" PRId64 ":%d %" PRId64 ":%d (dts %" PRId64 ")\n", j, s->frames[j]->pkt_size, i, s->pkts[i].size, s->pkts[i].dts);
+						av_log(NULL, AV_LOG_ERROR,
+							"size mismatch %" PRId64 ":%d %" PRId64 ":%d (dts %" PRId64 ")\n",
+							j, s->frames[j]->pkt_size, i, s->pkts[i].size, s->pkts[i].dts);
 						exit(1);
 					}
 					#endif
@@ -392,11 +376,15 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 				}
 			}
 			if (!frame) {
-				av_log(NULL, AV_LOG_ERROR, "frame for pkt #%zd (dts %" PRId64 ") not found\n", i, s->pkts[i].dts);
+				av_log(NULL, AV_LOG_ERROR,
+					"frame for pkt #%zd (dts %" PRId64 ") not found\n",
+					i, s->pkts[i].dts);
 				exit(1);
 			}
 			
-			s->pkts[i].pts = av_rescale_q(frame->pts, pr->in_fctx->streams[s->stream_index]->codec->time_base, pr->in_fctx->streams[s->stream_index]->time_base);
+			s->pkts[i].pts = av_rescale_q(frame->pts,
+					pr->in_fctx->streams[s->stream_index]->codec->time_base,
+					pr->in_fctx->streams[s->stream_index]->time_base);
 			
 			ts = frame_pts2ts(pr, s, s->frames[i]);
 			
@@ -413,16 +401,23 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 				s->pkts[i].dts = s->next_dts;
 				s->next_dts += s->pkts[i].duration;
 				
+				// if the original h264 stream is in AVCC format, convert it to Annex B
 				if (!pr->in_fctx->streams[s->stream_index]->codec->opaque ||
 					!((struct codeccontext*) pr->in_fctx->streams[s->stream_index]->codec->opaque)->h264_annexb_format)
 				{
-					av_bitstream_filter_filter(h264bsf, pr->in_fctx->streams[s->stream_index]->codec, NULL, &s->pkts[i].data, &s->pkts[i].size, s->pkts[i].data, s->pkts[i].size, s->pkts[i].flags & AV_PKT_FLAG_KEY);
+					av_bitstream_filter_filter(bsf_h264_to_annexb,
+						pr->in_fctx->streams[s->stream_index]->codec, NULL,
+						&s->pkts[i].data, &s->pkts[i].size, s->pkts[i].data, s->pkts[i].size,
+						s->pkts[i].flags & AV_PKT_FLAG_KEY);
 				}
 				
-				av_log(NULL, AV_LOG_DEBUG, "write v cpy size: %d pts: %" PRId64 " dts: %" PRId64 " - %f to %f\n", s->pkts[i].size, s->pkts[i].pts, s->pkts[i].dts,
-						ts, s->pkts[i].pts * pr->out_fctx->streams[s->stream_index]->time_base.num /
-							(double)pr->out_fctx->streams[s->stream_index]->time_base.den
-						);
+				av_log(NULL, AV_LOG_DEBUG,
+					"write v cpy size: %d pts: %" PRId64 " dts: %" PRId64 " - %f to %f\n",
+					s->pkts[i].size, s->pkts[i].pts, s->pkts[i].dts, ts,
+					s->pkts[i].pts * pr->out_fctx->streams[s->stream_index]->time_base.num /
+						(double)pr->out_fctx->streams[s->stream_index]->time_base.den
+					);
+				
 				ret = av_interleaved_write_frame(pr->out_fctx, &s->pkts[i]);
 				if (ret < 0) {
 					av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
@@ -488,7 +483,9 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			
 			// convert from packet to frame time_base, if necessary
 			if (frame->pts == frame->pkt_dts || frame->pts == frame->pkt_pts)
-				frame->pts = av_rescale_q(frame->pts, pr->in_fctx->streams[stream_index]->time_base, pr->in_fctx->streams[stream_index]->codec->time_base);
+				frame->pts = av_rescale_q(frame->pts,
+							pr->in_fctx->streams[stream_index]->time_base,
+							pr->in_fctx->streams[stream_index]->codec->time_base);
 			
 			// the first packet in the video buffer is an I frame, if the
 			// current packet contains another I frame, flush the buffer
@@ -582,6 +579,7 @@ int main(int argc, char **argv) {
 				return ret;
 			}
 			
+			// detect h264 format
 			if (codec_ctx->codec_id == CODEC_ID_H264 && codec_ctx->extradata_size > 2) {
 				char nalu_start_code1[] = {0x0,0x0,0x1};
 				char nalu_start_code2[] = {0x0,0x0,0x0,0x1};
@@ -601,9 +599,9 @@ int main(int argc, char **argv) {
 					cctx->h264_annexb_format = 1;
 					codec_ctx->opaque = cctx;
 					
-					av_log(NULL, AV_LOG_DEBUG, "h264 in annexb format\n");
+					av_log(NULL, AV_LOG_DEBUG, "detected h264 in annexb format\n");
 				} else {
-					av_log(NULL, AV_LOG_DEBUG, "h264 in avcc format\n");
+					av_log(NULL, AV_LOG_DEBUG, "detected h264 in avcc format\n");
 				}
 			}
 		}
@@ -677,7 +675,7 @@ int main(int argc, char **argv) {
 // 			enc_cctx->keyint_min = 200;
 // 			enc_cctx->gop_size = 250;
 			enc_cctx->thread_count = 1; // spawning more threads causes avcodec_close to free threads multiple times
-			enc_cctx->codec_tag = 0;
+			enc_cctx->codec_tag = 0; // reset tag to avoid incompatibilities while changing container
 			
 			out_stream->sample_aspect_ratio = pr->in_fctx->streams[i]->sample_aspect_ratio;
 			
@@ -706,10 +704,11 @@ int main(int argc, char **argv) {
 		}
 	}
 	
-	h264bsf = av_bitstream_filter_init("h264_mp4toannexb");
+	// initialize bitstream filters
+	bsf_h264_to_annexb = av_bitstream_filter_init("h264_mp4toannexb");
 	bsf_dump_extra = av_bitstream_filter_init("dump_extra");
-	if (!bsf_dump_extra) {
-		av_log(NULL, AV_LOG_ERROR, "bitstream filter \"dump_extra\" not found");
+	if (!bsf_dump_extra || !bsf_h264_to_annexb) {
+		av_log(NULL, AV_LOG_ERROR, "error while initializing bitstream filters \"dump_extra\" and \"h264_mp4toannexb\"");
 		exit(1);
 	}
 	
@@ -786,8 +785,10 @@ int main(int argc, char **argv) {
 			if (sbuffer[stream_index].pkts == 0)
 				sbuffer[stream_index].length = 4;
 			sbuffer[stream_index].length *= 2;
-			sbuffer[stream_index].pkts = (AVPacket*) av_realloc(sbuffer[stream_index].pkts, sizeof(AVPacket)*sbuffer[stream_index].length);
-			sbuffer[stream_index].frames = (AVFrame**) av_realloc(sbuffer[stream_index].frames, sizeof(AVFrame*)*sbuffer[stream_index].length);
+			sbuffer[stream_index].pkts = (AVPacket*) av_realloc(sbuffer[stream_index].pkts,
+					sizeof(AVPacket)*sbuffer[stream_index].length);
+			sbuffer[stream_index].frames = (AVFrame**) av_realloc(sbuffer[stream_index].frames,
+					sizeof(AVFrame*)*sbuffer[stream_index].length);
 			sbuffer[stream_index].stream_index = stream_index;
 		}
 		
@@ -826,6 +827,7 @@ int main(int argc, char **argv) {
 	 * cleanup
 	 */
 	
+	av_bitstream_filter_close(bsf_h264_to_annexb);
 	av_bitstream_filter_close(bsf_dump_extra);
 	
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
