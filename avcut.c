@@ -255,7 +255,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 			// libav is missing pkt_size
 			if (s->frames[s->n_frames-1]->pkt_size != s->pkts[i].size) {
 				av_log(NULL, AV_LOG_ERROR,
-					"size mismatch %" PRId64 ":%d %" PRId64 ":%d\n",
+					"size mismatch %zu:%d %zu:%d\n",
 					s->n_frames-1, s->frames[s->n_frames-1]->pkt_size, i,
 					s->pkts[i].size);
 				exit(1);
@@ -365,7 +365,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 					// libav is missing pkt_size
 					if (s->frames[j]->pkt_size != s->pkts[i].size) {
 						av_log(NULL, AV_LOG_ERROR,
-							"size mismatch %" PRId64 ":%d %" PRId64 ":%d (dts %" PRId64 ")\n",
+							"size mismatch %zu:%d %zu:%d (dts %" PRId64 ")\n",
 							j, s->frames[j]->pkt_size, i, s->pkts[i].size, s->pkts[i].dts);
 						exit(1);
 					}
