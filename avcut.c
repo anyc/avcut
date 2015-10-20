@@ -59,6 +59,25 @@ struct codeccontext {
 	char h264_avcc_format; // flag: h264 stream with annexb = 0, or avcc = 1
 };
 
+#if (LIBAVCODEC_VERSION_MAJOR < 55) || \
+	( (LIBAVCODEC_VERSION_MAJOR == 55) && (LIBAVCODEC_VERSION_MINOR < 55) )
+// backported function to fix compilation with versions < v2.3
+void av_packet_rescale_ts(AVPacket *pkt, AVRational src_tb, AVRational dst_tb)
+{
+	if (pkt->pts != AV_NOPTS_VALUE)
+		pkt->pts = av_rescale_q(pkt->pts, src_tb, dst_tb);
+	if (pkt->dts != AV_NOPTS_VALUE)
+		pkt->dts = av_rescale_q(pkt->dts, src_tb, dst_tb);
+	if (pkt->duration > 0)
+		pkt->duration = av_rescale_q(pkt->duration, src_tb, dst_tb);
+	#if FF_API_CONVERGENCE_DURATION
+	FF_DISABLE_DEPRECATION_WARNINGS
+	if (pkt->convergence_duration > 0)
+		pkt->convergence_duration = av_rescale_q(pkt->convergence_duration, src_tb, dst_tb);
+	FF_ENABLE_DEPRECATION_WARNINGS
+	#endif
+}
+#endif
 
 // encode a frame and write the resulting packet into the output file
 int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *frame, int *got_frame_p) {
