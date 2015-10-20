@@ -40,6 +40,8 @@ struct packet_buffer {
 	size_t length; // allocated array length of .pkts and .frames
 	
 	long next_dts; // DTS of the next packet that will be written
+	long last_pts; // store last PTS in case we're dealing with AVIs where the
+				// last two frames may have a zero DTS
 };
 
 // project state context
@@ -89,8 +91,8 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 	
 	
 	if (frame)
-		av_log(NULL, AV_LOG_DEBUG, "enc frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " type: %c\n",
-			frame->pts, frame->pkt_pts, frame->pkt_dts, av_get_picture_type_char(frame->pict_type));
+		av_log(NULL, AV_LOG_DEBUG, "enc frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c\n",
+			frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type));
 	
 	av_init_packet(&enc_pkt);
 	
@@ -210,13 +212,14 @@ double get_n_dropped_pkgs_at_ts(struct project *pr, struct packet_buffer *s, dou
 }
 
 // process packet buffer - either copy, ignore or reencode packets in the packet buffer according to the cut list
-void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
-	size_t i, j, inter_pkt;
+void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_flush) {
+	size_t i, j, last_pkt;
 	int ret;
 	char copy_complete_buffer = 0;
 	double offset = 0;
 	char last_frame_dropped = 1;
 	double ts;
+	size_t last_frame;
 	
 	
 	if (pr->in_fctx->streams[s->stream_index]->codec->codec_type != AVMEDIA_TYPE_VIDEO) {
@@ -262,36 +265,49 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 		return;
 	}
 	
-	// check if we can copy the complete buffer or if we have to check each packet individually
-	copy_complete_buffer = is_buffer_uncut(pr, s, s->n_frames-2);
+	// If this is the last flush, process all frames. If not, ignore the last
+	// frame (that is an I frame) as we process it during the next buffer flush
+	if (last_flush)
+		last_frame = s->n_frames-1;
+	else
+		last_frame = s->n_frames-2;
 	
-	inter_pkt = s->n_pkts;
-	// get packet with second (and therefore last) inter frame
-	for (i=0;i<s->n_pkts;i++) {
-		// we cannot compare packet.dts with frame.pkt_dts as they differ by 2 (maybe caused by multithreading)
-		if ((s->pkts[i].pts != AV_NOPTS_VALUE && s->pkts[i].pts == s->frames[s->n_frames-1]->pkt_pts) ||
-			(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == s->frames[s->n_frames-1]->coded_picture_number))
-		{
-			#ifndef USING_LIBAV
-			// libav is missing pkt_size
-			if (s->frames[s->n_frames-1]->pkt_size != s->pkts[i].size) {
-				av_log(NULL, AV_LOG_ERROR,
-					"size mismatch %zu:%d %zu:%d\n",
-					s->n_frames-1, s->frames[s->n_frames-1]->pkt_size, i,
-					s->pkts[i].size);
-				exit(1);
+	// check if we can copy the complete buffer or if we have to check each packet individually
+	copy_complete_buffer = is_buffer_uncut(pr, s, last_frame);
+	
+	if (last_flush) {
+		// we consider all packets during the last flush
+		last_pkt = s->n_pkts;
+	} else {
+		// get packet with second (and therefore last) inter frame
+		
+		last_pkt = s->n_pkts;
+		for (i=0;i<s->n_pkts;i++) {
+			// we cannot compare packet.dts with frame.pkt_dts as they differ by 2 (maybe caused by multithreading)
+			if ((s->pkts[i].pts != AV_NOPTS_VALUE && s->pkts[i].pts == s->frames[s->n_frames-1]->pkt_pts) ||
+				(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == s->frames[s->n_frames-1]->coded_picture_number))
+			{
+				#ifndef USING_LIBAV
+				// libav is missing pkt_size
+				if (s->frames[s->n_frames-1]->pkt_size != s->pkts[i].size) {
+					av_log(NULL, AV_LOG_ERROR,
+						"size mismatch %zu:%d %zu:%d\n",
+						s->n_frames-1, s->frames[s->n_frames-1]->pkt_size, i,
+						s->pkts[i].size);
+					exit(1);
+				}
+				#endif
+				last_pkt = i;
+				break;
 			}
-			#endif
-			inter_pkt = i;
-			break;
+			if (!copy_complete_buffer)
+				av_free_packet(&s->pkts[i]);
 		}
-		if (!copy_complete_buffer)
-			av_free_packet(&s->pkts[i]);
-	}
-	if (inter_pkt == s->n_pkts) {
-		av_log(NULL, AV_LOG_ERROR, "packet for second I frame (cpn %d) not found\n",
-			s->frames[s->n_frames-1]->coded_picture_number);
-		exit(1);
+		if (last_pkt == s->n_pkts) {
+			av_log(NULL, AV_LOG_ERROR, "packet for second I frame (cpn %d) not found\n",
+				s->frames[s->n_frames-1]->coded_picture_number);
+			exit(1);
+		}
 	}
 	
 	// TODO: check if we can simply cut if the last frame is a P-frame
@@ -373,7 +389,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 			out_cctx->codec->init(out_cctx);
 		}
 	} else {
-		for (i=0;i<inter_pkt;i++) {
+		for (i=0;i<last_pkt;i++) {
 			AVFrame *frame;
 			
 			// find frame for current packet to determine the PTS
@@ -456,8 +472,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 	}
 	
 	// update buffer structures
-	memmove(&s->pkts[0], &s->pkts[inter_pkt], sizeof(AVPacket)*(s->n_pkts-inter_pkt));
-	s->n_pkts = s->n_pkts - inter_pkt;
+	memmove(&s->pkts[0], &s->pkts[last_pkt], sizeof(AVPacket)*(s->n_pkts-last_pkt));
+	s->n_pkts = s->n_pkts - last_pkt;
 	s->frames[0] = s->frames[s->n_frames-1];
 	s->n_frames = 1;
 }
@@ -474,6 +490,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 	
 	mtype = pr->in_fctx->streams[stream_index]->codec->codec_type;
 	
+	got_frame = 0;
 	if (mtype == AVMEDIA_TYPE_VIDEO) {
 		if (!(frame = av_frame_alloc())) {
 			av_log(NULL, AV_LOG_ERROR, "error while allocating frame\n");
@@ -481,11 +498,11 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 		}
 		
 		ret = avcodec_decode_video2(pr->in_fctx->streams[stream_index]->codec, frame, &got_frame, packet);
-		if (ret <= 0) {
+		
+		if (ret < 0) {
 			av_frame_free(&frame);
-			if (ret < 0 )
-				av_log(NULL, AV_LOG_ERROR, "Decoding frame failed\n");
-			return 0;
+			av_log(NULL, AV_LOG_ERROR, "Decoding frame failed\n");
+			return ret;
 		}
 		
 		if (got_frame) {
@@ -501,12 +518,21 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				frame->pts = frame->pkt_dts;
 			#endif
 			
-			
 			// convert from packet to frame time_base, if necessary
 			if (frame->pts == frame->pkt_dts || frame->pts == frame->pkt_pts)
 				frame->pts = av_rescale_q(frame->pts,
 							pr->in_fctx->streams[stream_index]->time_base,
 							pr->in_fctx->streams[stream_index]->codec->time_base);
+			
+			// The last frames in some AVIs have a DTS of zero. Here, we
+			// override the PTS (copied from DTS) in such a case to provide
+			// an increasing PTS
+			if (frame->pts < sbuffer->last_pts)
+				frame->pts = sbuffer->last_pts + av_rescale_q(frame->pkt_duration,
+					pr->in_fctx->streams[stream_index]->time_base,
+					pr->in_fctx->streams[stream_index]->codec->time_base);
+			
+			sbuffer->last_pts = frame->pts;
 			
 			// the first packet in the video buffer is an I frame, if the
 			// current packet contains another I frame, flush the buffer
@@ -514,7 +540,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				switch (frame->pict_type) {
 					case AV_PICTURE_TYPE_I:
 						for (i = 0; i < pr->in_fctx->nb_streams; i++) {
-							flush_packet_buffer(pr, &sbuffer[i]);
+							flush_packet_buffer(pr, &sbuffer[i], 0);
 						}
 						break;
 					case AV_PICTURE_TYPE_B:
@@ -527,7 +553,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 		}
 	}
 	
-	return 1;
+	return got_frame;
 }
 
 int main(int argc, char **argv) {
@@ -729,14 +755,14 @@ int main(int argc, char **argv) {
 	pr->bsf_h264_to_annexb = av_bitstream_filter_init("h264_mp4toannexb");
 	pr->bsf_dump_extra = av_bitstream_filter_init("dump_extra");
 	if (!pr->bsf_dump_extra || !pr->bsf_h264_to_annexb) {
-		av_log(NULL, AV_LOG_ERROR, "error while initializing bitstream filters \"dump_extra\" and \"h264_mp4toannexb\"");
+		av_log(NULL, AV_LOG_ERROR, "error while initializing bitstream filters \"dump_extra\" and \"h264_mp4toannexb\"\n");
 		exit(1);
 	}
 	
 	if (!(pr->out_fctx->oformat->flags & AVFMT_NOFILE)) {
 		ret = avio_open(&pr->out_fctx->pb, outputf, AVIO_FLAG_WRITE);
 		if (ret < 0) {
-			av_log(NULL, AV_LOG_ERROR, "Cannot open output file '%s', error %d", outputf, ret);
+			av_log(NULL, AV_LOG_ERROR, "Cannot open output file '%s', error %d\n", outputf, ret);
 			return ret;
 		}
 	}
@@ -818,27 +844,33 @@ int main(int argc, char **argv) {
 		
 		// decode packet (and start flushing the buffer if necessary)
 		ret = decode_packet(pr, sbuffer, stream_index, &packet);
-		if (ret == 0)
-			break;
 		if (ret < 0)
 			return ret;
 	}
+	
+	av_log(NULL, AV_LOG_DEBUG, "flushing decoder...\n");
 	
 	// if no more packet can be read, there might be still data in the queues, hence flush them if necessary
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
 		if (!pr->out_fctx->streams[i]->codec->codec || !(pr->out_fctx->streams[i]->codec->codec->capabilities & CODEC_CAP_DELAY))
 			continue;
 		
-		ret = decode_packet(pr, sbuffer, i, 0);
-		if (ret < 0)
-			return ret;
+		while (1) {
+			ret = decode_packet(pr, sbuffer, i, 0);
+			if (ret == 0)
+				break;
+			if (ret < 0)
+				return ret;
+		}
 	}
+	
+	av_log(NULL, AV_LOG_DEBUG, "flushing buffer...\n");
 	
 	// more flushing
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
 		if (!pr->out_fctx->streams[i]->codec->codec || !(pr->out_fctx->streams[i]->codec->codec->capabilities & CODEC_CAP_DELAY))
 			continue;
-		flush_packet_buffer(pr, &sbuffer[i]);
+		flush_packet_buffer(pr, &sbuffer[i], 1);
 	}
 	
 	// conclude writing
