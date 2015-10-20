@@ -56,7 +56,7 @@ struct project {
 
 // private data avcut may store with each AVCodecContext
 struct codeccontext {
-	char h264_annexb_format; // flag: h264 stream with annexb = 1, or avcc = 0
+	char h264_avcc_format; // flag: h264 stream with annexb = 0, or avcc = 1
 };
 
 
@@ -402,8 +402,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 				s->next_dts += s->pkts[i].duration;
 				
 				// if the original h264 stream is in AVCC format, convert it to Annex B
-				if (!pr->in_fctx->streams[s->stream_index]->codec->opaque ||
-					!((struct codeccontext*) pr->in_fctx->streams[s->stream_index]->codec->opaque)->h264_annexb_format)
+				if (pr->in_fctx->streams[s->stream_index]->codec->opaque &&
+					((struct codeccontext*) pr->in_fctx->streams[s->stream_index]->codec->opaque)->h264_avcc_format)
 				{
 					av_bitstream_filter_filter(bsf_h264_to_annexb,
 						pr->in_fctx->streams[s->stream_index]->codec, NULL,
@@ -586,21 +586,21 @@ int main(int argc, char **argv) {
 				
 				// AVCUT_DUMP_CHAR(codec_ctx->extradata, 4);
 				
+				struct codeccontext *cctx;
+				cctx = av_malloc(sizeof(struct codeccontext));
+				if (!cctx) {
+					av_log(NULL, AV_LOG_ERROR, "malloc codeccontext failed\n");
+					return AVERROR_UNKNOWN;
+				}
+				codec_ctx->opaque = cctx;
+				
 				if (!memcmp(codec_ctx->extradata, nalu_start_code1, 3) ||
 					!memcmp(codec_ctx->extradata, nalu_start_code2, 4))
 				{
-					struct codeccontext *cctx;
-					cctx = av_malloc(sizeof(struct codeccontext));
-					if (!cctx) {
-						av_log(NULL, AV_LOG_ERROR, "malloc codeccontext failed\n");
-						return AVERROR_UNKNOWN;
-					}
-					
-					cctx->h264_annexb_format = 1;
-					codec_ctx->opaque = cctx;
-					
+					cctx->h264_avcc_format = 0;
 					av_log(NULL, AV_LOG_DEBUG, "detected h264 in annexb format\n");
 				} else {
+					cctx->h264_avcc_format = 1;
 					av_log(NULL, AV_LOG_DEBUG, "detected h264 in avcc format\n");
 				}
 			}
