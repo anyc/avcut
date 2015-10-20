@@ -27,9 +27,6 @@
 
 #define AVCUT_DUMP_CHAR(var, length) { size_t i; for (i=0; i<(length); i++) { printf("%x ", ((char*) (var))[i]); } printf("\n"); }
 
-AVBitStreamFilterContext *bsf_h264_to_annexb;
-AVBitStreamFilterContext *bsf_dump_extra;
-
 // buffer management struct for a stream
 struct packet_buffer {
 	unsigned int stream_index;
@@ -45,19 +42,24 @@ struct packet_buffer {
 	long next_dts; // DTS of the next packet that will be written
 };
 
-// global state struct
+// project state context
 struct project {
 	AVFormatContext *in_fctx;
 	AVFormatContext *out_fctx;
 	
 	double *cuts; // [ first_excluded_frame, first_included_frame, ...]
 	size_t n_cuts;
+	
+	AVBitStreamFilterContext *bsf_h264_to_annexb;
+	AVBitStreamFilterContext *bsf_dump_extra;
 };
 
 // private data avcut may store with each AVCodecContext
 struct codeccontext {
 	char h264_avcc_format; // flag: h264 stream with annexb = 0, or avcc = 1
 };
+
+
 
 #if (LIBAVCODEC_VERSION_MAJOR < 55) || \
 	( (LIBAVCODEC_VERSION_MAJOR == 55) && (LIBAVCODEC_VERSION_MINOR < 55) )
@@ -110,7 +112,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		
 		// copy the header to the beginning of each key frame if we use a global header
 		if (ostream->codec->flags & CODEC_FLAG_GLOBAL_HEADER)
-			av_bitstream_filter_filter(bsf_dump_extra, ostream->codec, NULL,
+			av_bitstream_filter_filter(pr->bsf_dump_extra, ostream->codec, NULL,
 				&enc_pkt.data, &enc_pkt.size, enc_pkt.data, enc_pkt.size,
 				enc_pkt.flags & AV_PKT_FLAG_KEY);
 		
@@ -424,7 +426,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s) {
 				if (pr->in_fctx->streams[s->stream_index]->codec->opaque &&
 					((struct codeccontext*) pr->in_fctx->streams[s->stream_index]->codec->opaque)->h264_avcc_format)
 				{
-					av_bitstream_filter_filter(bsf_h264_to_annexb,
+					av_bitstream_filter_filter(pr->bsf_h264_to_annexb,
 						pr->in_fctx->streams[s->stream_index]->codec, NULL,
 						&s->pkts[i].data, &s->pkts[i].size, s->pkts[i].data, s->pkts[i].size,
 						s->pkts[i].flags & AV_PKT_FLAG_KEY);
@@ -724,9 +726,9 @@ int main(int argc, char **argv) {
 	}
 	
 	// initialize bitstream filters
-	bsf_h264_to_annexb = av_bitstream_filter_init("h264_mp4toannexb");
-	bsf_dump_extra = av_bitstream_filter_init("dump_extra");
-	if (!bsf_dump_extra || !bsf_h264_to_annexb) {
+	pr->bsf_h264_to_annexb = av_bitstream_filter_init("h264_mp4toannexb");
+	pr->bsf_dump_extra = av_bitstream_filter_init("dump_extra");
+	if (!pr->bsf_dump_extra || !pr->bsf_h264_to_annexb) {
 		av_log(NULL, AV_LOG_ERROR, "error while initializing bitstream filters \"dump_extra\" and \"h264_mp4toannexb\"");
 		exit(1);
 	}
@@ -846,8 +848,8 @@ int main(int argc, char **argv) {
 	 * cleanup
 	 */
 	
-	av_bitstream_filter_close(bsf_h264_to_annexb);
-	av_bitstream_filter_close(bsf_dump_extra);
+	av_bitstream_filter_close(pr->bsf_h264_to_annexb);
+	av_bitstream_filter_close(pr->bsf_dump_extra);
 	
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
 		av_freep(&sbuffer[i].pkts);
