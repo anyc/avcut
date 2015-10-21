@@ -198,15 +198,22 @@ double get_n_dropped_pkgs_at_ts(struct project *pr, struct packet_buffer *s, dou
 	size_t i;
 	double result = 0;
 	
+	// we only consider positive values
+	#define FLOOR(x) ( (double) ((long)(x)) )
+	
 	for (i=0; i < pr->n_cuts; i+=2) {
 		if (pr->cuts[i+1] <= ts) {
-			result += (pr->cuts[i+1] - pr->cuts[i]) / av_q2d(pr->in_fctx->streams[s->stream_index]->time_base);
+			// TODO include or drop frame that would be cut in two pieces?
+			// round down value as given cut points may not match the time base
+			result += FLOOR((pr->cuts[i+1] - pr->cuts[i]) /
+				av_q2d(pr->in_fctx->streams[s->stream_index]->time_base));
 		} else {
 			break;
 		}
 	}
 	
-	av_log(NULL, AV_LOG_DEBUG, "dropped frames at %f: %f\n", ts, result);
+	av_log(NULL, AV_LOG_DEBUG, "dropped pkgs at %f (tb %f): %f\n", ts,
+		av_q2d(pr->in_fctx->streams[s->stream_index]->time_base), result);
 	
 	return result;
 }
@@ -527,10 +534,13 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			// The last frames in some AVIs have a DTS of zero. Here, we
 			// override the PTS (copied from DTS) in such a case to provide
 			// an increasing PTS
-			if (frame->pts < sbuffer->last_pts)
-				frame->pts = sbuffer->last_pts + av_rescale_q(frame->pkt_duration,
+			if (frame->pts < sbuffer->last_pts) {
+				uint64_t new_pts = sbuffer->last_pts + av_rescale_q(frame->pkt_duration,
 					pr->in_fctx->streams[stream_index]->time_base,
 					pr->in_fctx->streams[stream_index]->codec->time_base);
+				av_log(NULL, AV_LOG_DEBUG, "adjusting frame PTS from %ld to %ld\n", frame->pts, new_pts);
+				frame->pts = new_pts;
+			}
 			
 			sbuffer->last_pts = frame->pts;
 			
