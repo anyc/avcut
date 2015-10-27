@@ -55,10 +55,11 @@ Usage
 
 Besides the input and output file, avcut expects a "blacklist", i.e. what should
 be dropped, as argument. This blacklist consists of timestamps that denote from
-where to where frames have to be dropped.
+where to where frames have to be dropped. The last argument can be a hyphen to
+indicate that all remaining frames shall be dropped.
 
-For example, to drop the frames of the first 10 seconds and the frames between
-55.5s and 130s in input.avi and write the result to output.mkv, the following
-command can be used:
+For example, to drop the frames of the first 10 seconds, the frames between
+55.5s and 130s and all frames after 140s in input.avi and write the result to
+output.mkv, the following command can be used:
 
-`avcut input.avi output.mkv 0 10 55.5 130`
+`avcut input.avi output.mkv 0 10 55.5 130 140 -`

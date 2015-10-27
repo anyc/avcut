@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <float.h>
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -51,6 +52,9 @@ struct project {
 	
 	double *cuts; // [ first_excluded_frame, first_included_frame, ...]
 	size_t n_cuts;
+	
+	double stop_after_ts; // stop after this timestamp
+	char stop_reading; // signal to stop reading new packets
 	
 	AVBitStreamFilterContext *bsf_h264_to_annexb;
 	AVBitStreamFilterContext *bsf_dump_extra;
@@ -147,6 +151,9 @@ double frame_pts2ts(struct project *pr, struct packet_buffer *s, AVFrame *frame)
 // check if pkt/frame at timestamp $ts shall be included
 char ts_included(struct project *pr, double ts) {
 	size_t i;
+	
+	if (pr->stop_after_ts < ts)
+		pr->stop_reading = 1;
 	
 	// check if timestampe lies in a cut interval
 	for (i=0; i < pr->n_cuts; i+=2) {
@@ -591,12 +598,18 @@ int main(int argc, char **argv) {
 	
 	pr->n_cuts = argc - 3;
 	pr->cuts = (double*) malloc(sizeof(double)*pr->n_cuts);
+	pr->stop_after_ts = DBL_MAX;
 	
 	for (i=3; i < argc; i++) {
 		char *end;
-		pr->cuts[i-3] = strtod(argv[i], &end);
-		if (end == argv[i] || *end != 0) {
-			av_log(NULL, AV_LOG_ERROR, "error while parsing cut point: %s\n", argv[i]);
+		if ((i % 2 == 0) && !strcmp(argv[i], "-")) {
+			pr->stop_after_ts = pr->cuts[i-4];
+			pr->cuts[i-3] = DBL_MAX;
+		} else {
+			pr->cuts[i-3] = strtod(argv[i], &end);
+			if (end == argv[i] || *end != 0) {
+				av_log(NULL, AV_LOG_ERROR, "error while parsing cut point: %s\n", argv[i]);
+			}
 		}
 	}
 	
@@ -825,7 +838,8 @@ int main(int argc, char **argv) {
 	}
 	
 	// start processing the input
-	while (1) {
+	pr->stop_reading = 0;
+	while (!pr->stop_reading) {
 		unsigned int stream_index;
 		AVPacket packet = { .data = NULL, .size = 0 };
 		
