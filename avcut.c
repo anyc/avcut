@@ -31,6 +31,7 @@
 // buffer management struct for a stream
 struct packet_buffer {
 	unsigned int stream_index;
+	char stop_reading_stream; // do we have all required packets for this stream?
 	
 	AVPacket *pkts;
 	size_t n_pkts; // number of pkts in .pkts
@@ -55,6 +56,7 @@ struct project {
 	
 	double stop_after_ts; // stop after this timestamp
 	char stop_reading; // signal to stop reading new packets
+	char last_flush;
 	
 	AVBitStreamFilterContext *bsf_h264_to_annexb;
 	AVBitStreamFilterContext *bsf_dump_extra;
@@ -152,9 +154,6 @@ double frame_pts2ts(struct project *pr, struct packet_buffer *s, AVFrame *frame)
 char ts_included(struct project *pr, double ts) {
 	size_t i;
 	
-	if (pr->stop_after_ts < ts)
-		pr->stop_reading = 1;
-	
 	// check if timestampe lies in a cut interval
 	for (i=0; i < pr->n_cuts; i+=2) {
 		if (pr->cuts[i] <= ts && ts < pr->cuts[i+1])
@@ -181,7 +180,7 @@ char is_buffer_uncut(struct project *pr, struct packet_buffer *s, unsigned long 
 		buf_end = frame_pts2ts(pr, s, s->frames[last_iframe]);
 	}
 	
-	av_log(NULL, AV_LOG_DEBUG, "check buffer %f : %f\n", buf_start, buf_end);
+	av_log(NULL, AV_LOG_DEBUG, "check buffer stream %u: %f to %f\n", s->stream_index, buf_start, buf_end);
 	
 	for (i=0; i < pr->n_cuts; i++) {
 		// check if any cutpoint lies between buffer start and end
@@ -235,6 +234,11 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 	double ts;
 	size_t last_frame;
 	
+// 	if (pr->last_flush)
+// 		pr->stop_reading = 1;
+	
+	if (!s->pkts || s->n_pkts == 0)
+		return;
 	
 	if (pr->in_fctx->streams[s->stream_index]->codec->codec_type != AVMEDIA_TYPE_VIDEO) {
 		// check if we can copy the complete buffer or if we have to check each packet individually
@@ -242,6 +246,9 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		
 		for (i=0;i<s->n_pkts;i++) {
 			ts = s->pkts[i].pts * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base);
+			
+			if (pr->stop_after_ts < ts)
+				s->stop_reading_stream = 1;
 			
 			if (copy_complete_buffer || ts_included(pr, ts)) {
 				// recalculate PTS offset after we continue to write frames
@@ -279,15 +286,19 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		return;
 	}
 	
-	// If this is the last flush, process all frames. If not, ignore the last
-	// frame (that is an I frame) as we process it during the next buffer flush
-	if (last_flush)
-		last_frame = s->n_frames-1;
-	else
-		last_frame = s->n_frames-2;
-	
-	// check if we can copy the complete buffer or if we have to check each packet individually
-	copy_complete_buffer = is_buffer_uncut(pr, s, last_frame);
+	if (s->n_frames > 1) {
+		// If this is the last flush, process all frames. If not, ignore the last
+		// frame (that is an I frame) as we process it during the next buffer flush
+		if (last_flush)
+			last_frame = s->n_frames-1;
+		else
+			last_frame = s->n_frames-2;
+		
+		// check if we can copy the complete buffer or if we have to check each packet individually
+		copy_complete_buffer = is_buffer_uncut(pr, s, last_frame);
+	} else {
+		copy_complete_buffer = 1;
+	}
 	
 	if (last_flush) {
 		// we consider all packets during the last flush
@@ -298,8 +309,14 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		last_pkt = s->n_pkts;
 		for (i=0;i<s->n_pkts;i++) {
 			// we cannot compare packet.dts with frame.pkt_dts as they differ by 2 (maybe caused by multithreading)
-			if ((s->pkts[i].pts != AV_NOPTS_VALUE && s->pkts[i].pts == s->frames[s->n_frames-1]->pkt_pts) ||
-				(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == s->frames[s->n_frames-1]->coded_picture_number))
+			if (
+				(s->pkts[i].pts != AV_NOPTS_VALUE &&
+					s->pkts[i].pts == s->frames[s->n_frames-1]->pkt_pts) ||
+				(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts != AV_NOPTS_VALUE &&
+					s->pkts[i].dts == s->frames[s->n_frames-1]->coded_picture_number) ||
+				(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == AV_NOPTS_VALUE &&
+					s->frames[s->n_frames-1]->pkt_size == s->pkts[i].size)
+				)
 			{
 				#ifndef USING_LIBAV
 				// libav is missing pkt_size
@@ -312,14 +329,27 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				}
 				#endif
 				last_pkt = i;
-				break;
+// 				break;
 			}
-			if (!copy_complete_buffer)
+			if (!copy_complete_buffer &&
+				(s->pkts[i].pts == AV_NOPTS_VALUE || s->pkts[i].pts < s->frames[s->n_frames-1]->pkt_pts))
+			{
 				av_free_packet(&s->pkts[i]);
+			}
 		}
 		if (last_pkt == s->n_pkts) {
 			av_log(NULL, AV_LOG_ERROR, "packet for second I frame (cpn %d) not found\n",
 				s->frames[s->n_frames-1]->coded_picture_number);
+			
+			for (i=0;i<s->n_pkts;i++) {
+				av_log(NULL, AV_LOG_DEBUG, "%zu %zu %zu %zu - %d %d - %d (NOPTS: %zu)\n",
+					s->pkts[i].pts, s->pkts[i].dts, s->frames[s->n_frames-1]->pkt_dts,
+					s->frames[s->n_frames-1]->pkt_pts,
+					s->frames[s->n_frames-1]->pkt_size, s->pkts[i].size,
+					s->frames[s->n_frames-1]->coded_picture_number,
+					AV_NOPTS_VALUE);
+			}
+			
 			exit(1);
 		}
 	}
@@ -345,6 +375,9 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			s->frames[i]->pts -= av_rescale_q(offset,
 					pr->in_fctx->streams[s->stream_index]->time_base,
 					pr->in_fctx->streams[s->stream_index]->codec->time_base);
+			
+			if (pr->stop_after_ts < ts)
+				s->stop_reading_stream = 1;
 			
 			if (ts_included(pr, ts)) {
 				if (last_frame_dropped)
@@ -403,14 +436,27 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			out_cctx->codec->init(out_cctx);
 		}
 	} else {
-		for (i=0;i<last_pkt;i++) {
+// 		for (i=0;i<last_pkt;i++) {
+		for (i=0;i<s->n_pkts;i++) {
 			AVFrame *frame;
+			
+			if (s->pkts[i].pts != AV_NOPTS_VALUE && s->pkts[i].pts > s->frames[s->n_frames-1]->pkt_pts)
+				continue;
 			
 			// find frame for current packet to determine the PTS
 			frame = 0;
 			for (j=0;j<s->n_frames;j++) {
-				if ((s->pkts[i].pts != AV_NOPTS_VALUE && s->pkts[i].pts == s->frames[j]->pkt_pts) ||
-					(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == s->frames[j]->coded_picture_number))
+// 				if ((s->pkts[i].pts != AV_NOPTS_VALUE && s->pkts[i].pts == s->frames[j]->pkt_pts) ||
+// 					(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == s->frames[j]->coded_picture_number))
+// 				{
+				if (
+					(s->pkts[i].pts != AV_NOPTS_VALUE &&
+						s->pkts[i].pts == s->frames[j]->pkt_pts) ||
+					(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts != AV_NOPTS_VALUE &&
+						s->pkts[i].dts == s->frames[j]->coded_picture_number) ||
+					(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == AV_NOPTS_VALUE &&
+						s->frames[j]->pkt_size == s->pkts[i].size)
+					)
 				{
 					#ifndef USING_LIBAV
 					// libav is missing pkt_size
@@ -428,8 +474,20 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			}
 			if (!frame) {
 				av_log(NULL, AV_LOG_ERROR,
-					"frame for pkt #%zd (dts %" PRId64 ") not found\n",
-					i, s->pkts[i].dts);
+					"frame for pkt #%zd (dts %" PRId64 " pts %" PRId64 ") not found\n",
+					i, s->pkts[i].dts, s->pkts[i].pts);
+				
+				
+				for (j=0;j<s->n_frames;j++) {
+					av_log(NULL, AV_LOG_DEBUG, "%zu %zu %zu %zu - %6d %6d - %d type: %c (NOPTS: %zu)\n",
+						s->pkts[i].pts, s->pkts[i].dts, s->frames[j]->pkt_dts,
+						s->frames[j]->pkt_pts,
+						s->frames[j]->pkt_size, s->pkts[i].size,
+						s->frames[j]->coded_picture_number,
+						av_get_picture_type_char(s->frames[j]->pict_type),
+						AV_NOPTS_VALUE);
+				}
+				
 				exit(1);
 			}
 			
@@ -438,6 +496,9 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					pr->in_fctx->streams[s->stream_index]->time_base);
 			
 			ts = frame_pts2ts(pr, s, s->frames[i]);
+			
+			if (pr->stop_after_ts < ts)
+				s->stop_reading_stream = 1;
 			
 			// recalculate PTS offset after we continue to write frames
 			if (last_frame_dropped)
@@ -485,9 +546,20 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			av_frame_free(&s->frames[j]);
 	}
 	
+	AVPacket *newpkts = (AVPacket*) av_realloc(0, sizeof(AVPacket)*s->length);
+	j = 0;
+	for (i=0;i<s->n_pkts;i++) {
+		if (s->pkts[i].size != 0 && s->pkts[i].data != NULL) {
+			memcpy(&newpkts[j], &s->pkts[i], sizeof(AVPacket));
+			j++;
+		}
+	}
+	av_freep(&s->pkts);
+	s->pkts = newpkts;
+	s->n_pkts = j;
 	// update buffer structures
-	memmove(&s->pkts[0], &s->pkts[last_pkt], sizeof(AVPacket)*(s->n_pkts-last_pkt));
-	s->n_pkts = s->n_pkts - last_pkt;
+// 	memmove(&s->pkts[0], &s->pkts[last_pkt], sizeof(AVPacket)*(s->n_pkts-last_pkt));
+// 	s->n_pkts = s->n_pkts - last_pkt;
 	s->frames[0] = s->frames[s->n_frames-1];
 	s->n_frames = 1;
 }
@@ -510,6 +582,12 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			av_log(NULL, AV_LOG_ERROR, "error while allocating frame\n");
 			return AVERROR(ENOMEM);
 		}
+// 		for (i=0;i<16;i++) printf("%x ", packet->data[i] ); printf("\n");
+// 		for (i=0;i<16;i++) printf("%3d ", packet->data[i] ); printf("\n");
+// 		int fragment_type = packet->data[4] & 0x1F;
+// 		int nal_type = packet->data[5] & 0x1F;
+// 		int start_bit = packet->data[5] & 0x80;
+// 		printf("%d %d %d\n", fragment_type, nal_type, start_bit);
 		
 		ret = avcodec_decode_video2(pr->in_fctx->streams[stream_index]->codec, frame, &got_frame, packet);
 		
@@ -556,9 +634,19 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			if (sbuffer[stream_index].n_frames > 1) {
 				switch (frame->pict_type) {
 					case AV_PICTURE_TYPE_I:
+						if (pr->last_flush == 1)
+							pr->stop_reading = 1;
+						
+						char n_finished_streams = 0;
 						for (i = 0; i < pr->in_fctx->nb_streams; i++) {
 							flush_packet_buffer(pr, &sbuffer[i], 0);
+// 							printf("%d\n", sbuffer[i].stop_reading_stream);
+							if (sbuffer[i].stop_reading_stream)
+								n_finished_streams++;
 						}
+// 						printf("%d %d\n", n_finished_streams, pr->in_fctx->nb_streams);
+						if (n_finished_streams == pr->in_fctx->nb_streams)
+							pr->last_flush = 1;
 						break;
 					case AV_PICTURE_TYPE_B:
 					case AV_PICTURE_TYPE_P:
@@ -599,6 +687,7 @@ int main(int argc, char **argv) {
 	pr->n_cuts = argc - 3;
 	pr->cuts = (double*) malloc(sizeof(double)*pr->n_cuts);
 	pr->stop_after_ts = DBL_MAX;
+	pr->last_flush = 0;
 	
 	for (i=3; i < argc; i++) {
 		char *end;
@@ -663,7 +752,7 @@ int main(int argc, char **argv) {
 					return AVERROR_UNKNOWN;
 				}
 				codec_ctx->opaque = cctx;
-				
+				for (i=0;i<16;i++) printf("%x ", codec_ctx->extradata[i] ); printf("\n");
 				if (!memcmp(codec_ctx->extradata, nalu_start_code1, 3) ||
 					!memcmp(codec_ctx->extradata, nalu_start_code2, 4))
 				{
@@ -708,6 +797,10 @@ int main(int argc, char **argv) {
 		AVStream *out_stream;
 		AVCodecContext *dec_cctx, *enc_cctx;
 		
+		
+// 		if (pr->in_fctx->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC)
+// 			continue;
+		
 		out_stream = avformat_new_stream(pr->out_fctx, NULL);
 		if (!out_stream) {
 			av_log(NULL, AV_LOG_ERROR, "Failed allocating output stream\n");
@@ -741,7 +834,8 @@ int main(int argc, char **argv) {
 			enc_cctx->qmin = 16;
 			enc_cctx->qmax = 26;
 			enc_cctx->max_qdiff = 4;
-			enc_cctx->max_b_frames = 3;
+			if (dec_cctx->codec_id == CODEC_ID_H264)
+				enc_cctx->max_b_frames = 3;
 // 			enc_cctx->keyint_min = 200;
 // 			enc_cctx->gop_size = 250;
 			enc_cctx->thread_count = 1; // spawning more threads causes avcodec_close to free threads multiple times
