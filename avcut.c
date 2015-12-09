@@ -1088,15 +1088,29 @@ int main(int argc, char **argv) {
 		avio_closep(&pr->out_fctx->pb);
 	avformat_free_context(pr->out_fctx);
 	
+	#ifdef CREATE_CHECK_SCRIPT
+	FILE *check_script = fopen("avcut_check_cutpoints.sh", "a");
+	fprintf(check_script, "mpv \"edl://");
+	#endif
+	
 	// print some info to check the cutpoints of the resulting video
 	av_log(NULL, AV_LOG_INFO, "cutpoints in \"%s\": ", outputf);
 	double removed = 0;
 	for (i=0;i<pr->n_cuts;i+=2) {
 		double c = pr->cuts[i]-removed;
 		av_log(NULL, AV_LOG_INFO, "%fs (%um %2us) ", c, (unsigned int)c/60, (unsigned int)c % 60);
+		
+		#ifdef CREATE_CHECK_SCRIPT
+		fprintf(check_script, "%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
+		#endif
+		
 		removed += pr->cuts[i+1] - pr->cuts[i];
 	}
 	av_log(NULL, AV_LOG_INFO, "\n");
+	
+	#ifdef CREATE_CHECK_SCRIPT
+	fprintf(check_script, "\"\n\n");
+	#endif
 	
 	av_freep(&pr->cuts);
 	av_freep(&sbuffer);
