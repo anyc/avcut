@@ -51,6 +51,9 @@ struct project {
 	AVFormatContext *in_fctx;
 	AVFormatContext *out_fctx;
 	
+	unsigned int n_stream_ids; // number of streams in output file
+	unsigned int *stream_ids; // mapping of output stream to input stream
+	
 	double *cuts; // [ first_excluded_frame, first_included_frame, ...]
 	size_t n_cuts;
 	
@@ -97,8 +100,10 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 	
 	
 	if (frame)
-		av_log(NULL, AV_LOG_DEBUG, "enc frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c\n",
-			frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type));
+		av_log(NULL, AV_LOG_DEBUG, "enc frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
+			frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
+			frame->pts*ostream->codec->time_base.num/(double)ostream->codec->time_base.den
+ 			);
 	
 	av_init_packet(&enc_pkt);
 	
@@ -218,10 +223,56 @@ double get_n_dropped_pkgs_at_ts(struct project *pr, struct packet_buffer *s, dou
 		}
 	}
 	
-	av_log(NULL, AV_LOG_DEBUG, "dropped pkgs at %f (tb %f): %f\n", ts,
-		av_q2d(pr->in_fctx->streams[s->stream_index]->time_base), result);
+// 	av_log(NULL, AV_LOG_DEBUG, "dropped pkgs at %f (tb %f): %f\n", ts,
+// 		av_q2d(pr->in_fctx->streams[s->stream_index]->time_base), result);
 	
 	return result;
+}
+
+char find_packet_for_frame(struct packet_buffer *s, size_t frame_idx, size_t *packet_idx) {
+	size_t i;
+	
+	for (i=0;i<s->n_pkts;i++) {
+		// we cannot compare packet.dts with frame.pkt_dts as they differ by 2 (maybe caused by multithreading)
+		if (
+			(s->pkts[i].pts != AV_NOPTS_VALUE &&
+				s->pkts[i].pts == s->frames[frame_idx]->pkt_pts) ||
+			(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts != AV_NOPTS_VALUE &&
+				s->pkts[i].dts == s->frames[frame_idx]->coded_picture_number) ||
+			(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == AV_NOPTS_VALUE &&
+				s->frames[frame_idx]->pkt_size == s->pkts[i].size)
+		)
+		{
+			#ifndef USING_LIBAV
+			// libav is missing pkt_size
+			if (s->frames[frame_idx]->pkt_size != s->pkts[i].size) {
+				av_log(NULL, AV_LOG_ERROR,
+					  "size mismatch %zu:%d %zu:%d\n",
+						frame_idx, s->frames[frame_idx]->pkt_size, i,
+						s->pkts[i].size);
+				exit(1);
+			}
+			#endif
+			
+			*packet_idx = i;
+// 			printf("found %zu %zu \n", i, s->frames[frame_idx]->pts);
+			return 1;
+		}
+	}
+	
+	av_log(NULL, AV_LOG_ERROR, "packet for frame %zu (cpn %d) not found\n",
+			frame_idx, s->frames[frame_idx]->coded_picture_number);
+	
+	for (i=0;i<s->n_pkts;i++) {
+		av_log(NULL, AV_LOG_DEBUG, "%zu %zu %zu %zu - %d %d - %d (NOPTS: %zu)\n",
+				s->pkts[i].pts, s->pkts[i].dts, s->frames[frame_idx]->pkt_dts,
+				s->frames[frame_idx]->pkt_pts,
+				s->frames[frame_idx]->pkt_size, s->pkts[i].size,
+				s->frames[frame_idx]->coded_picture_number,
+				AV_NOPTS_VALUE);
+	}
+	
+	return 0;
 }
 
 // process packet buffer - either copy, ignore or reencode packets in the packet buffer according to the cut list
@@ -234,8 +285,6 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 	double ts;
 	size_t last_frame;
 	
-// 	if (pr->last_flush)
-// 		pr->stop_reading = 1;
 	
 	if (!s->pkts || s->n_pkts == 0)
 		return;
@@ -300,57 +349,48 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		copy_complete_buffer = 1;
 	}
 	
+	// determine the last packet we have to look at for this GOP
 	if (last_flush) {
 		// we consider all packets during the last flush
-		last_pkt = s->n_pkts;
+		last_pkt = s->n_pkts-1;
 	} else {
-		// get packet with second (and therefore last) inter frame
+		// find the packet with the highest DTS in this GOP
 		
-		last_pkt = s->n_pkts;
-		for (i=0;i<s->n_pkts;i++) {
-			// we cannot compare packet.dts with frame.pkt_dts as they differ by 2 (maybe caused by multithreading)
-			if (
-				(s->pkts[i].pts != AV_NOPTS_VALUE &&
-					s->pkts[i].pts == s->frames[s->n_frames-1]->pkt_pts) ||
-				(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts != AV_NOPTS_VALUE &&
-					s->pkts[i].dts == s->frames[s->n_frames-1]->coded_picture_number) ||
-				(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == AV_NOPTS_VALUE &&
-					s->frames[s->n_frames-1]->pkt_size == s->pkts[i].size)
-				)
-			{
-				#ifndef USING_LIBAV
-				// libav is missing pkt_size
-				if (s->frames[s->n_frames-1]->pkt_size != s->pkts[i].size) {
-					av_log(NULL, AV_LOG_ERROR,
-						"size mismatch %zu:%d %zu:%d\n",
-						s->n_frames-1, s->frames[s->n_frames-1]->pkt_size, i,
-						s->pkts[i].size);
-					exit(1);
-				}
-				#endif
-				last_pkt = i;
-// 				break;
+		/*
+		 * The packet that belongs to the last frame in a GOP might not have
+		 * the highest DTS of the GOP's packets. Hence, we search backwards
+		 * for the packet with the highest DTS. Otherwise, we might miss packets,
+		 * e.g., if the last B frame depends on the second I frame and,
+		 * consequently, the I frame has a lower DTS than the B frame.
+		 * 
+		 * We stop with the search if we have found two P frames or after a
+		 * B frame and a P frame has been found.
+		 */
+		
+		size_t pkt_idx;
+		char b_found = 0;
+		char n_p_frames = 0;
+		
+		last_pkt = 0;
+		for (i = s->n_frames-2; i > 0; i--) {
+			if (s->frames[i]->pict_type == AV_PICTURE_TYPE_B)
+				b_found=1;
+			if (s->frames[i]->pict_type == AV_PICTURE_TYPE_P) {
+				n_p_frames++;
+				if (b_found || n_p_frames > 2)
+					break;
 			}
-			if (!copy_complete_buffer &&
-				(s->pkts[i].pts == AV_NOPTS_VALUE || s->pkts[i].pts < s->frames[s->n_frames-1]->pkt_pts))
-			{
-				av_free_packet(&s->pkts[i]);
-			}
+			
+			if (!find_packet_for_frame(s, i, &pkt_idx))
+				exit(1);
+			if (pkt_idx > last_pkt)
+				last_pkt = pkt_idx;
 		}
-		if (last_pkt == s->n_pkts) {
-			av_log(NULL, AV_LOG_ERROR, "packet for second I frame (cpn %d) not found\n",
-				s->frames[s->n_frames-1]->coded_picture_number);
-			
-			for (i=0;i<s->n_pkts;i++) {
-				av_log(NULL, AV_LOG_DEBUG, "%zu %zu %zu %zu - %d %d - %d (NOPTS: %zu)\n",
-					s->pkts[i].pts, s->pkts[i].dts, s->frames[s->n_frames-1]->pkt_dts,
-					s->frames[s->n_frames-1]->pkt_pts,
-					s->frames[s->n_frames-1]->pkt_size, s->pkts[i].size,
-					s->frames[s->n_frames-1]->coded_picture_number,
-					AV_NOPTS_VALUE);
-			}
-			
-			exit(1);
+		
+		if (!copy_complete_buffer) {
+			// if we encode all frames we don't need the original packets
+			for (i=0;i<=last_pkt;i++)
+				av_free_packet(&s->pkts[i]);
 		}
 	}
 	
@@ -436,19 +476,12 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			out_cctx->codec->init(out_cctx);
 		}
 	} else {
-// 		for (i=0;i<last_pkt;i++) {
-		for (i=0;i<s->n_pkts;i++) {
+		for (i=0;i<=last_pkt;i++) {
 			AVFrame *frame;
-			
-			if (s->pkts[i].pts != AV_NOPTS_VALUE && s->pkts[i].pts > s->frames[s->n_frames-1]->pkt_pts)
-				continue;
 			
 			// find frame for current packet to determine the PTS
 			frame = 0;
 			for (j=0;j<s->n_frames;j++) {
-// 				if ((s->pkts[i].pts != AV_NOPTS_VALUE && s->pkts[i].pts == s->frames[j]->pkt_pts) ||
-// 					(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == s->frames[j]->coded_picture_number))
-// 				{
 				if (
 					(s->pkts[i].pts != AV_NOPTS_VALUE &&
 						s->pkts[i].pts == s->frames[j]->pkt_pts) ||
@@ -477,7 +510,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					"frame for pkt #%zd (dts %" PRId64 " pts %" PRId64 ") not found\n",
 					i, s->pkts[i].dts, s->pkts[i].pts);
 				
-				
+				av_log(NULL, AV_LOG_DEBUG, "pkt_pts pkt_dts frame->pkt_dts frame->pkt_pts - frame->pkt_size pkt_size - cpn\n");
 				for (j=0;j<s->n_frames;j++) {
 					av_log(NULL, AV_LOG_DEBUG, "%zu %zu %zu %zu - %6d %6d - %d type: %c (NOPTS: %zu)\n",
 						s->pkts[i].pts, s->pkts[i].dts, s->frames[j]->pkt_dts,
@@ -507,11 +540,15 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			s->pkts[i].pts -= offset;
 			
 			if (ts_included(pr, ts)) {
+				// calculate duration to avoid deviation between PTS and DTS
+				double dur = s->pkts[i].duration * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base) /
+					av_q2d( pr->out_fctx->streams[s->stream_index]->time_base);
+					
 				av_packet_rescale_ts(&s->pkts[i], pr->in_fctx->streams[s->stream_index]->time_base,
 								 pr->out_fctx->streams[s->stream_index]->time_base);
 				
 				s->pkts[i].dts = s->next_dts;
-				s->next_dts += s->pkts[i].duration;
+				s->next_dts += dur;
 				
 				// if the original h264 stream is in AVCC format, convert it to Annex B
 				if (pr->in_fctx->streams[s->stream_index]->codec->opaque &&
@@ -546,6 +583,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			av_frame_free(&s->frames[j]);
 	}
 	
+	// update buffer structures
 	AVPacket *newpkts = (AVPacket*) av_realloc(0, sizeof(AVPacket)*s->length);
 	j = 0;
 	for (i=0;i<s->n_pkts;i++) {
@@ -557,9 +595,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 	av_freep(&s->pkts);
 	s->pkts = newpkts;
 	s->n_pkts = j;
-	// update buffer structures
-// 	memmove(&s->pkts[0], &s->pkts[last_pkt], sizeof(AVPacket)*(s->n_pkts-last_pkt));
-// 	s->n_pkts = s->n_pkts - last_pkt;
+	
 	s->frames[0] = s->frames[s->n_frames-1];
 	s->n_frames = 1;
 }
@@ -638,14 +674,14 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 							pr->stop_reading = 1;
 						
 						char n_finished_streams = 0;
-						for (i = 0; i < pr->in_fctx->nb_streams; i++) {
+						for (i = 0; i < pr->n_stream_ids; i++) {
 							flush_packet_buffer(pr, &sbuffer[i], 0);
 // 							printf("%d\n", sbuffer[i].stop_reading_stream);
 							if (sbuffer[i].stop_reading_stream)
 								n_finished_streams++;
 						}
-// 						printf("%d %d\n", n_finished_streams, pr->in_fctx->nb_streams);
-						if (n_finished_streams == pr->in_fctx->nb_streams)
+// 						printf("%d %d %d\n", n_finished_streams, pr->n_stream_ids, pr->stop_reading);
+						if (n_finished_streams == pr->n_stream_ids)
 							pr->last_flush = 1;
 						break;
 					case AV_PICTURE_TYPE_B:
@@ -662,7 +698,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 }
 
 int main(int argc, char **argv) {
-	unsigned int i;
+	unsigned int i, j;
 	int ret;
 	char *inputf, *outputf;
 	struct project project;
@@ -723,6 +759,9 @@ int main(int argc, char **argv) {
 		return ret;
 	}
 	
+	pr->n_stream_ids = 0;
+	pr->stream_ids = 0;
+	
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
 		AVCodecContext *codec_ctx;
 		
@@ -752,7 +791,9 @@ int main(int argc, char **argv) {
 					return AVERROR_UNKNOWN;
 				}
 				codec_ctx->opaque = cctx;
-				for (i=0;i<16;i++) printf("%x ", codec_ctx->extradata[i] ); printf("\n");
+				
+// 				for (j=0;j<16;j++) printf("%x ", codec_ctx->extradata[j] ); printf("\n");
+				
 				if (!memcmp(codec_ctx->extradata, nalu_start_code1, 3) ||
 					!memcmp(codec_ctx->extradata, nalu_start_code2, 4))
 				{
@@ -763,6 +804,17 @@ int main(int argc, char **argv) {
 					av_log(NULL, AV_LOG_DEBUG, "detected h264 in avcc format\n");
 				}
 			}
+		}
+		
+		switch (codec_ctx->codec_type) {
+			case AVMEDIA_TYPE_VIDEO:
+			case AVMEDIA_TYPE_AUDIO:
+			case AVMEDIA_TYPE_SUBTITLE:
+				pr->n_stream_ids++;
+				pr->stream_ids = (unsigned int*) realloc(pr->stream_ids, sizeof(unsigned int)*pr->n_stream_ids);
+				pr->stream_ids[pr->n_stream_ids-1] = i;
+				break;
+			default: break;
 		}
 	}
 	
@@ -793,10 +845,11 @@ int main(int argc, char **argv) {
 	#endif
 	
 	// copy most properties from the input streams to the output streams
-	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
+	for (j = 0; j < pr->n_stream_ids; j++) {
 		AVStream *out_stream;
 		AVCodecContext *dec_cctx, *enc_cctx;
 		
+		i = pr->stream_ids[j];
 		
 // 		if (pr->in_fctx->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC)
 // 			continue;
@@ -855,7 +908,7 @@ int main(int argc, char **argv) {
 			av_log(NULL, AV_LOG_ERROR, "Error: input stream #%d is of unknown type\n", i);
 			return AVERROR_INVALIDDATA;
 		} else {
-			ret = avcodec_copy_context(pr->out_fctx->streams[i]->codec, pr->in_fctx->streams[i]->codec);
+			ret = avcodec_copy_context(pr->out_fctx->streams[j]->codec, pr->in_fctx->streams[i]->codec);
 			if (ret < 0) {
 				av_log(NULL, AV_LOG_ERROR, "Copying codec context failed, error %d\n", ret);
 				return ret;
@@ -887,48 +940,51 @@ int main(int argc, char **argv) {
 	// copy main metadata
 	av_dict_copy(&pr->out_fctx->metadata, pr->in_fctx->metadata, 0);
 	
+	av_dump_format(pr->out_fctx, 0, outputf, 1);
+	
 	ret = avformat_write_header(pr->out_fctx, NULL);
 	if (ret < 0) {
 		av_log(NULL, AV_LOG_ERROR, "Cannot write header to '%s', error %d\n", outputf, ret);
 		return ret;
 	}
 	
-	av_dump_format(pr->out_fctx, 0, outputf, 1);
-	
-	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
+	for (j = 0; j < pr->n_stream_ids; j++) {
+		i = pr->stream_ids[j];
+		
 		#define DUMP_TB(tb) "%5d / %5d\n", (tb)->num, (tb)->den
 		av_log(NULL, AV_LOG_DEBUG, "\n");
 		av_log(NULL, AV_LOG_DEBUG, "stream %d in:\n", i);
 		av_log(NULL, AV_LOG_DEBUG, "stream: " DUMP_TB(&pr->in_fctx->streams[i]->time_base));
 		av_log(NULL, AV_LOG_DEBUG, "codec:  " DUMP_TB(&pr->in_fctx->streams[i]->codec->time_base));
 		av_log(NULL, AV_LOG_DEBUG, "ticks_per_frame: %d\n", pr->in_fctx->streams[i]->codec->ticks_per_frame);
-		av_log(NULL, AV_LOG_DEBUG, "stream %d out:\n", i);
-		av_log(NULL, AV_LOG_DEBUG, "stream: " DUMP_TB(&pr->out_fctx->streams[i]->time_base));
-		av_log(NULL, AV_LOG_DEBUG, "codec:  " DUMP_TB(&pr->out_fctx->streams[i]->codec->time_base));
-		av_log(NULL, AV_LOG_DEBUG, "ticks_per_frame: %d\n", pr->out_fctx->streams[i]->codec->ticks_per_frame);
+		av_log(NULL, AV_LOG_DEBUG, "stream %d out:\n", j);
+		av_log(NULL, AV_LOG_DEBUG, "stream: " DUMP_TB(&pr->out_fctx->streams[j]->time_base));
+		av_log(NULL, AV_LOG_DEBUG, "codec:  " DUMP_TB(&pr->out_fctx->streams[j]->codec->time_base));
+		av_log(NULL, AV_LOG_DEBUG, "ticks_per_frame: %d\n", pr->out_fctx->streams[j]->codec->ticks_per_frame);
 	}
 	av_log(NULL, AV_LOG_DEBUG, "\n");
 	
 	
 	struct packet_buffer *sbuffer;
-	sbuffer = (struct packet_buffer*) av_calloc(1, sizeof(struct packet_buffer) * pr->in_fctx->nb_streams);
+	sbuffer = (struct packet_buffer*) av_calloc(1, sizeof(struct packet_buffer) * pr->n_stream_ids);
 	
 	// determine a safe starting value for the DTS from the GOP size
 	long dts_offset = 0;
 	long newo;
-	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
+	for (j = 0; j < pr->n_stream_ids; j++) {
+		i = pr->stream_ids[j];
 		// use -gop_size as start for DTS
 		newo = pr->in_fctx->streams[i]->codec->gop_size;
-		newo = 0 - pr->out_fctx->streams[i]->codec->ticks_per_frame * 
-			av_rescale_q(newo, pr->out_fctx->streams[i]->codec->time_base, pr->out_fctx->streams[i]->time_base);
+		newo = 0 - pr->out_fctx->streams[j]->codec->ticks_per_frame * 
+			av_rescale_q(newo, pr->out_fctx->streams[j]->codec->time_base, pr->out_fctx->streams[j]->time_base);
 		if (newo < dts_offset)
 			dts_offset = newo;
 	}
 	
 	// set the initial DTS for each stream
-	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
-		sbuffer[i].next_dts = dts_offset;
-		av_log(NULL, AV_LOG_DEBUG, "initial DTS %u: %ld\n", i, sbuffer[i].next_dts);
+	for (j = 0; j < pr->n_stream_ids; j++) {
+		sbuffer[j].next_dts = dts_offset;
+		av_log(NULL, AV_LOG_DEBUG, "initial DTS %u: %ld\n", j, sbuffer[j].next_dts);
 	}
 	
 	// start processing the input
@@ -943,7 +999,17 @@ int main(int argc, char **argv) {
 			break;
 		}
 		
-		stream_index = packet.stream_index;
+		for (i=0; i<pr->n_stream_ids; i++) {
+			if (pr->stream_ids[i] == packet.stream_index) {
+				stream_index = i;
+				break;
+			}
+		}
+		if (i==pr->n_stream_ids) {
+			// skip packet
+			continue;
+		}
+// 		stream_index = packet.stream_index;
 		
 		// check if our buffer is large enough
 		if (sbuffer[stream_index].n_pkts == sbuffer[stream_index].length) {
@@ -969,12 +1035,12 @@ int main(int argc, char **argv) {
 	av_log(NULL, AV_LOG_DEBUG, "flushing decoder...\n");
 	
 	// if no more packet can be read, there might be still data in the queues, hence flush them if necessary
-	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
-		if (!pr->out_fctx->streams[i]->codec->codec || !(pr->out_fctx->streams[i]->codec->codec->capabilities & CODEC_CAP_DELAY))
+	for (j = 0; j < pr->n_stream_ids; j++) {
+		if (!pr->out_fctx->streams[j]->codec->codec || !(pr->out_fctx->streams[j]->codec->codec->capabilities & CODEC_CAP_DELAY))
 			continue;
 		
 		while (1) {
-			ret = decode_packet(pr, sbuffer, i, 0);
+			ret = decode_packet(pr, sbuffer, j, 0);
 			if (ret == 0)
 				break;
 			if (ret < 0)
@@ -985,10 +1051,10 @@ int main(int argc, char **argv) {
 	av_log(NULL, AV_LOG_DEBUG, "flushing buffer...\n");
 	
 	// more flushing
-	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
-		if (!pr->out_fctx->streams[i]->codec->codec || !(pr->out_fctx->streams[i]->codec->codec->capabilities & CODEC_CAP_DELAY))
+	for (j = 0; j < pr->n_stream_ids; j++) {
+		if (!pr->out_fctx->streams[j]->codec->codec || !(pr->out_fctx->streams[j]->codec->codec->capabilities & CODEC_CAP_DELAY))
 			continue;
-		flush_packet_buffer(pr, &sbuffer[i], 1);
+		flush_packet_buffer(pr, &sbuffer[j], 1);
 	}
 	
 	// conclude writing
@@ -1001,18 +1067,20 @@ int main(int argc, char **argv) {
 	av_bitstream_filter_close(pr->bsf_h264_to_annexb);
 	av_bitstream_filter_close(pr->bsf_dump_extra);
 	
-	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
-		av_freep(&sbuffer[i].pkts);
-		av_freep(&sbuffer[i].frames);
+	for (j = 0; j < pr->n_stream_ids; j++) {
+		av_freep(&sbuffer[j].pkts);
+		av_freep(&sbuffer[j].frames);
 		
+		if (pr->out_fctx->streams[j]->codec && avcodec_is_open(pr->out_fctx->streams[j]->codec))
+			avcodec_close(pr->out_fctx->streams[j]->codec);
+	}
+	
+	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
 		if (pr->in_fctx->streams[i]->codec) {
 			av_freep(&pr->in_fctx->streams[i]->codec->opaque);
 			if (avcodec_is_open(pr->in_fctx->streams[i]->codec))
 				avcodec_close(pr->in_fctx->streams[i]->codec);
 		}
-		
-		if (i < pr->out_fctx->nb_streams && pr->out_fctx->streams[i]->codec && avcodec_is_open(pr->out_fctx->streams[i]->codec))
-			avcodec_close(pr->out_fctx->streams[i]->codec);
 	}
 	
 	avformat_close_input(&pr->in_fctx);
