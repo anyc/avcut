@@ -1110,13 +1110,9 @@ int main(int argc, char **argv) {
 	av_log(NULL, AV_LOG_INFO, "Other packets read: %zu\n", pr->other_packets_read);
 	av_log(NULL, AV_LOG_INFO, "Other packets written: %zu\n", pr->other_packets_written);
 	
-	#ifdef CREATE_CHECK_SCRIPT
-	FILE *check_script = fopen("avcut_check_cutpoints.sh", "a");
-	fprintf(check_script, "mpv \"edl://");
-	#endif
 	
 	// print some info to check the cutpoints of the resulting video
-	av_log(NULL, AV_LOG_INFO, "cutpoints in \"%s\": ", outputf);
+	av_log(NULL, AV_LOG_INFO, "\ncutting points in \"%s\" at: ", outputf);
 	double removed = 0;
 	for (i=0;i<pr->n_cuts;i+=2) {
 		double c = pr->cuts[i]-removed;
@@ -1130,9 +1126,27 @@ int main(int argc, char **argv) {
 	}
 	av_log(NULL, AV_LOG_INFO, "\n");
 	
+	
+	printf("\nYou can check the cutting points with:\nmpv \"edl://");
+	#ifdef CREATE_CHECK_SCRIPT
+	FILE *check_script = fopen("avcut_check_cutpoints.sh", "a");
+	fprintf(check_script, "mpv \"edl://");
+	#endif
+	removed = 0;
+	for (i=0;i<pr->n_cuts;i+=2) {
+		double c = pr->cuts[i]-removed;
+		
+		printf("%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
+		#ifdef CREATE_CHECK_SCRIPT
+		fprintf(check_script, "%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
+		#endif
+		
+		removed += pr->cuts[i+1] - pr->cuts[i];
+	}
 	#ifdef CREATE_CHECK_SCRIPT
 	fprintf(check_script, "\"\n\n");
 	#endif
+	printf("\"\n");
 	
 	av_freep(&pr->cuts);
 	av_freep(&sbuffer);
