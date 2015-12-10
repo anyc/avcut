@@ -50,6 +50,7 @@ struct packet_buffer {
 struct project {
 	AVFormatContext *in_fctx;
 	AVFormatContext *out_fctx;
+	char has_b_frames;
 	
 	unsigned int n_stream_ids; // number of streams in output file
 	unsigned int *stream_ids; // mapping of output stream to input stream
@@ -60,6 +61,13 @@ struct project {
 	double stop_after_ts; // stop after this timestamp
 	char stop_reading; // signal to stop reading new packets
 	char last_flush;
+	
+	size_t video_packets_read;
+	size_t other_packets_read;
+	size_t video_packets_decoded;
+	size_t video_frames_encoded;
+	size_t video_packets_written;
+	size_t other_packets_written;
 	
 	AVBitStreamFilterContext *bsf_h264_to_annexb;
 	AVBitStreamFilterContext *bsf_dump_extra;
@@ -114,6 +122,8 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 	}
 	
 	if (got_frame) {
+		pr->video_frames_encoded++;
+		
 		enc_pkt.stream_index = s->stream_index;
 		if (enc_pkt.duration == 0)
 			enc_pkt.duration = ostream->codec->ticks_per_frame;
@@ -134,6 +144,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 			enc_pkt.size, enc_pkt.pts, enc_pkt.dts,
 			enc_pkt.pts*ostream->time_base.num/(double)ostream->time_base.den);
 		
+		pr->video_packets_written++;
 		ret = av_interleaved_write_frame(pr->out_fctx, &enc_pkt);
 		if (ret < 0) {
 			av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
@@ -317,6 +328,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					s->pkts[i].pts, s->pkts[i].dts, ts,
 					s->pkts[i].pts * av_q2d(pr->out_fctx->streams[s->stream_index]->time_base));
 				
+				pr->other_packets_written++;
 				ret = av_interleaved_write_frame(pr->out_fctx, &s->pkts[i]);
 				if (ret < 0) {
 					av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
@@ -567,6 +579,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 						(double)pr->out_fctx->streams[s->stream_index]->time_base.den
 					);
 				
+				pr->video_packets_written++;
 				ret = av_interleaved_write_frame(pr->out_fctx, &s->pkts[i]);
 				if (ret < 0) {
 					av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
@@ -641,6 +654,8 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			
 			sbuffer[stream_index].frames[sbuffer[stream_index].n_frames] = frame;
 			sbuffer[stream_index].n_frames++;
+			
+			pr->video_packets_decoded++;
 			
 			#ifndef USING_LIBAV
 			frame->pts = av_frame_get_best_effort_timestamp(frame);
@@ -724,6 +739,7 @@ int main(int argc, char **argv) {
 	outputf = argv[2];
 	
 	pr = &project;
+	memset(pr, 0, sizeof(struct project));
 	
 	pr->n_cuts = argc - 3;
 	pr->cuts = (double*) malloc(sizeof(double)*pr->n_cuts);
@@ -892,8 +908,11 @@ int main(int argc, char **argv) {
 			enc_cctx->qmin = 16;
 			enc_cctx->qmax = 26;
 			enc_cctx->max_qdiff = 4;
-			if (dec_cctx->codec_id == CODEC_ID_H264)
+			if (dec_cctx->has_b_frames) {
 				enc_cctx->max_b_frames = 3;
+				if (pr->has_b_frames < dec_cctx->has_b_frames)
+					pr->has_b_frames = dec_cctx->has_b_frames;
+			}
 // 			enc_cctx->keyint_min = 200;
 // 			enc_cctx->gop_size = 250;
 			enc_cctx->thread_count = 1; // spawning more threads causes avcodec_close to free threads multiple times
@@ -973,17 +992,20 @@ int main(int argc, char **argv) {
 	struct packet_buffer *sbuffer;
 	sbuffer = (struct packet_buffer*) av_calloc(1, sizeof(struct packet_buffer) * pr->n_stream_ids);
 	
-	// determine a safe starting value for the DTS from the GOP size
 	long dts_offset = 0;
-	long newo;
-	for (j = 0; j < pr->n_stream_ids; j++) {
-		i = pr->stream_ids[j];
-		// use -gop_size as start for DTS
-		newo = pr->in_fctx->streams[i]->codec->gop_size;
-		newo = 0 - pr->out_fctx->streams[j]->codec->ticks_per_frame * 
-			av_rescale_q(newo, pr->out_fctx->streams[j]->codec->time_base, pr->out_fctx->streams[j]->time_base);
-		if (newo < dts_offset)
-			dts_offset = newo;
+	if (pr->has_b_frames) {
+		// determine a safe starting value for the DTS from the GOP size
+		
+		long newo;
+		for (j = 0; j < pr->n_stream_ids; j++) {
+			i = pr->stream_ids[j];
+			// use -gop_size as start for DTS
+			newo = pr->in_fctx->streams[i]->codec->gop_size;
+			newo = 0 - pr->out_fctx->streams[j]->codec->ticks_per_frame * 
+				av_rescale_q(newo, pr->out_fctx->streams[j]->codec->time_base, pr->out_fctx->streams[j]->time_base);
+			if (newo < dts_offset)
+				dts_offset = newo;
+		}
 	}
 	
 	// set the initial DTS for each stream
@@ -1003,6 +1025,11 @@ int main(int argc, char **argv) {
 				av_log(NULL, AV_LOG_ERROR, "error while reading next frame: %d\n", ret);
 			break;
 		}
+		
+		if (pr->in_fctx->streams[packet.stream_index]->codec->codec_type == AVMEDIA_TYPE_VIDEO)
+			pr->video_packets_read++;
+		else
+			pr->other_packets_read++;
 		
 		// calculate output stream_index from packet's input stream_index
 		for (i=0; i<pr->n_stream_ids; i++) {
@@ -1089,6 +1116,13 @@ int main(int argc, char **argv) {
 	if (!(pr->out_fctx->oformat->flags & AVFMT_NOFILE))
 		avio_closep(&pr->out_fctx->pb);
 	avformat_free_context(pr->out_fctx);
+	
+	av_log(NULL, AV_LOG_INFO, "Video packets read: %zu\n", pr->video_packets_read);
+	av_log(NULL, AV_LOG_INFO, "Video packets decoded: %zu\n", pr->video_packets_decoded);
+	av_log(NULL, AV_LOG_INFO, "Video frames encoded: %zu\n", pr->video_frames_encoded);
+	av_log(NULL, AV_LOG_INFO, "Video packets written: %zu\n", pr->video_packets_written);
+	av_log(NULL, AV_LOG_INFO, "Other packets read: %zu\n", pr->other_packets_read);
+	av_log(NULL, AV_LOG_INFO, "Other packets written: %zu\n", pr->other_packets_written);
 	
 	#ifdef CREATE_CHECK_SCRIPT
 	FILE *check_script = fopen("avcut_check_cutpoints.sh", "a");
