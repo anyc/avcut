@@ -360,8 +360,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		 * The packet that belongs to the last frame in a GOP might not have
 		 * the highest DTS of the GOP's packets. Hence, we search backwards
 		 * for the packet with the highest DTS. Otherwise, we might miss packets,
-		 * e.g., if the last B frame depends on the second I frame and,
-		 * consequently, the I frame has a lower DTS than the B frame.
+		 * e.g., if the last frame is a P frame, its DTS is lower as the DTS
+		 * of the preceding B frames.
 		 * 
 		 * We stop with the search if we have found two P frames or after a
 		 * B frame and a P frame has been found.
@@ -634,6 +634,11 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 		}
 		
 		if (got_frame) {
+// 			av_log(NULL, AV_LOG_DEBUG, "dec frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
+// 				  frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
+// 				  frame->pts*av_q2d(pr->in_fctx->streams[stream_index]->codec->time_base)
+// 			);
+			
 			sbuffer[stream_index].frames[sbuffer[stream_index].n_frames] = frame;
 			sbuffer[stream_index].n_frames++;
 			
@@ -999,6 +1004,7 @@ int main(int argc, char **argv) {
 			break;
 		}
 		
+		// calculate output stream_index from packet's input stream_index
 		for (i=0; i<pr->n_stream_ids; i++) {
 			if (pr->stream_ids[i] == packet.stream_index) {
 				stream_index = i;
@@ -1009,7 +1015,6 @@ int main(int argc, char **argv) {
 			// skip packet
 			continue;
 		}
-// 		stream_index = packet.stream_index;
 		
 		// check if our buffer is large enough
 		if (sbuffer[stream_index].n_pkts == sbuffer[stream_index].length) {
@@ -1051,11 +1056,8 @@ int main(int argc, char **argv) {
 	av_log(NULL, AV_LOG_DEBUG, "flushing buffer...\n");
 	
 	// more flushing
-	for (j = 0; j < pr->n_stream_ids; j++) {
-		if (!pr->out_fctx->streams[j]->codec->codec || !(pr->out_fctx->streams[j]->codec->codec->capabilities & CODEC_CAP_DELAY))
-			continue;
+	for (j = 0; j < pr->n_stream_ids; j++)
 		flush_packet_buffer(pr, &sbuffer[j], 1);
-	}
 	
 	// conclude writing
 	av_write_trailer(pr->out_fctx);
