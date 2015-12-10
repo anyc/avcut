@@ -41,6 +41,7 @@ struct packet_buffer {
 	
 	size_t length; // allocated array length of .pkts and .frames
 	
+	unsigned long n_dropped_frames; // number of dropped frames since last kept frame
 	long next_dts; // DTS of the next packet that will be written
 	long last_pts; // store last PTS in case we're dealing with AVIs where the
 				// last two frames may have a zero DTS
@@ -291,8 +292,6 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 	size_t i, j, last_pkt;
 	int ret;
 	char copy_complete_buffer = 0;
-	double offset = 0;
-	char last_frame_dropped = 1;
 	double ts;
 	size_t last_frame;
 	
@@ -311,17 +310,17 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->stop_reading_stream = 1;
 			
 			if (copy_complete_buffer || ts_included(pr, ts)) {
-				// recalculate PTS offset after we continue to write frames
-				if (last_frame_dropped)
-					offset = get_n_dropped_pkgs_at_ts(pr, s, ts);
+				s->pkts[i].pts -= s->n_dropped_frames*s->pkts[i].duration;
 				
-				s->pkts[i].pts -= offset;
+				// calculate duration precisely to avoid deviation between PTS and DTS
+				double dur = s->pkts[i].duration * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base) /
+							av_q2d( pr->out_fctx->streams[s->stream_index]->time_base);
 				
 				av_packet_rescale_ts(&s->pkts[i], pr->in_fctx->streams[s->stream_index]->time_base,
 								 pr->out_fctx->streams[s->stream_index]->time_base);
 				
 				s->pkts[i].dts = s->next_dts;
-				s->next_dts += s->pkts[i].duration;
+				s->next_dts += dur;
 				
 				av_log(NULL, AV_LOG_DEBUG,
 					"write a cpy pts: %" PRId64 " dts: %" PRId64 " - %f to %f\n",
@@ -334,10 +333,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
 					exit(ret);
 				}
-				
-				last_frame_dropped = 0;
 			} else {
-				last_frame_dropped = 1;
+				s->n_dropped_frames++;
 			}
 			
 			av_free_packet(&s->pkts[i]);
@@ -420,21 +417,16 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			
 			ts = frame_pts2ts(pr, s, s->frames[i]);
 			
-			// recalculate PTS offset after we continue to write frames
-			if (last_frame_dropped)
-				offset = get_n_dropped_pkgs_at_ts(pr, s, ts);
-			
-			s->frames[i]->pts -= av_rescale_q(offset,
-					pr->in_fctx->streams[s->stream_index]->time_base,
-					pr->in_fctx->streams[s->stream_index]->codec->time_base);
+			// calculate new PTS
+			s->frames[i]->pts -= s->n_dropped_frames *
+					av_rescale_q(s->frames[i]->pkt_duration, 
+						pr->in_fctx->streams[s->stream_index]->time_base,
+						pr->in_fctx->streams[s->stream_index]->codec->time_base);
 			
 			if (pr->stop_after_ts < ts)
 				s->stop_reading_stream = 1;
 			
 			if (ts_included(pr, ts)) {
-				if (last_frame_dropped)
-					av_log(NULL, AV_LOG_DEBUG, "new PTS offset %f\n", offset);
-				
 				#ifndef USING_LIBAV
 				s->frames[i]->pict_type = AV_PICTURE_TYPE_NONE;
 				#else
@@ -447,10 +439,9 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					exit(ret);
 				}
 				
-				last_frame_dropped = 0;
 				frame_written = 1;
 			} else {
-				last_frame_dropped = 1;
+				s->n_dropped_frames++;
 				av_frame_free(&s->frames[i]);
 			}
 		}
@@ -545,17 +536,13 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			if (pr->stop_after_ts < ts)
 				s->stop_reading_stream = 1;
 			
-			// recalculate PTS offset after we continue to write frames
-			if (last_frame_dropped)
-				offset = get_n_dropped_pkgs_at_ts(pr, s, ts);
-			
-			s->pkts[i].pts -= offset;
-			
 			if (ts_included(pr, ts)) {
-				// calculate duration to avoid deviation between PTS and DTS
+				s->pkts[i].pts -= s->n_dropped_frames * s->pkts[i].duration;
+				
+				// calculate duration precisely to avoid deviation between PTS and DTS
 				double dur = s->pkts[i].duration * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base) /
 					av_q2d( pr->out_fctx->streams[s->stream_index]->time_base);
-					
+				
 				av_packet_rescale_ts(&s->pkts[i], pr->in_fctx->streams[s->stream_index]->time_base,
 								 pr->out_fctx->streams[s->stream_index]->time_base);
 				
@@ -585,9 +572,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
 					exit(ret);
 				}
-				last_frame_dropped = 0;
 			} else {
-				last_frame_dropped = 1;
+				s->n_dropped_frames++;
 			}
 			
 			av_free_packet(&s->pkts[i]);
