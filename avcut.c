@@ -44,7 +44,7 @@ struct packet_buffer {
 	
 	unsigned long duration_dropped_pkts; // accumulated duration of dropped packets
 	
-	long next_dts; // DTS of the next packet that will be written
+	double next_dts; // DTS of the next packet that will be written
 	long last_pts; // store last PTS in case we're dealing with AVIs where the
 				// last two frames may have a zero DTS
 };
@@ -321,7 +321,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				av_packet_rescale_ts(&s->pkts[i], pr->in_fctx->streams[s->stream_index]->time_base,
 								 pr->out_fctx->streams[s->stream_index]->time_base);
 				
-				s->pkts[i].dts = s->next_dts;
+				#define ROUND(x) ((int64_t)((x)+0.5))
+				s->pkts[i].dts = ROUND(s->next_dts);
 				s->next_dts += dur;
 				
 				av_log(NULL, AV_LOG_DEBUG,
@@ -832,6 +833,14 @@ int main(int argc, char **argv) {
 	 * open output file
 	 */
 	
+	{
+		struct stat st;
+		if (stat(outputf, &st) == 0) {
+			av_log(NULL, AV_LOG_ERROR, "error, output file \"%s\" already exists\n", outputf);
+			exit(1);
+		}
+	}
+	
 	#ifndef USING_LIBAV
 	avformat_alloc_output_context2(&pr->out_fctx, NULL, NULL, outputf);
 	#else
@@ -998,7 +1007,7 @@ int main(int argc, char **argv) {
 	// set the initial DTS for each stream
 	for (j = 0; j < pr->n_stream_ids; j++) {
 		sbuffer[j].next_dts = dts_offset;
-		av_log(NULL, AV_LOG_DEBUG, "initial DTS %u: %ld\n", j, sbuffer[j].next_dts);
+		av_log(NULL, AV_LOG_DEBUG, "initial DTS %u: %.0f\n", j, sbuffer[j].next_dts);
 	}
 	
 	// start processing the input
@@ -1111,13 +1120,15 @@ int main(int argc, char **argv) {
 	av_log(NULL, AV_LOG_INFO, "Other packets read: %zu\n", pr->other_packets_read);
 	av_log(NULL, AV_LOG_INFO, "Other packets written: %zu\n", pr->other_packets_written);
 	
-	struct stat st;
-	size_t size;
-	
-	stat(inputf, &st);
-	size = st.st_size;
-	stat(outputf, &st);
-	av_log(NULL, AV_LOG_INFO, "\nFile size reduction: %f MB\n", (size - st.st_size) / (double) (1000*1000) );
+	{
+		struct stat st;
+		size_t size;
+		
+		stat(inputf, &st);
+		size = st.st_size;
+		stat(outputf, &st);
+		av_log(NULL, AV_LOG_INFO, "\nFile size reduction: %f MB\n", (size - st.st_size) / (double) (1000*1000) );
+	}
 	
 	// print some info to check the cutpoints of the resulting video
 	av_log(NULL, AV_LOG_INFO, "\ncutting points in \"%s\" at: ", outputf);
