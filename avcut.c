@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <float.h>
+#include <sys/stat.h>
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -1110,6 +1111,13 @@ int main(int argc, char **argv) {
 	av_log(NULL, AV_LOG_INFO, "Other packets read: %zu\n", pr->other_packets_read);
 	av_log(NULL, AV_LOG_INFO, "Other packets written: %zu\n", pr->other_packets_written);
 	
+	struct stat st;
+	size_t size;
+	
+	stat(inputf, &st);
+	size = st.st_size;
+	stat(outputf, &st);
+	av_log(NULL, AV_LOG_INFO, "\nFile size reduction: %f MB\n", (size - st.st_size) / (double) (1000*1000) );
 	
 	// print some info to check the cutpoints of the resulting video
 	av_log(NULL, AV_LOG_INFO, "\ncutting points in \"%s\" at: ", outputf);
