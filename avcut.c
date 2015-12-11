@@ -41,7 +41,8 @@ struct packet_buffer {
 	
 	size_t length; // allocated array length of .pkts and .frames
 	
-	unsigned long n_dropped_frames; // number of dropped frames since last kept frame
+	unsigned long duration_dropped_pkts; // accumulated duration of dropped packets
+	
 	long next_dts; // DTS of the next packet that will be written
 	long last_pts; // store last PTS in case we're dealing with AVIs where the
 				// last two frames may have a zero DTS
@@ -310,7 +311,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->stop_reading_stream = 1;
 			
 			if (copy_complete_buffer || ts_included(pr, ts)) {
-				s->pkts[i].pts -= s->n_dropped_frames*s->pkts[i].duration;
+				s->pkts[i].pts -= s->duration_dropped_pkts;
 				
 				// calculate duration precisely to avoid deviation between PTS and DTS
 				double dur = s->pkts[i].duration * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base) /
@@ -334,7 +335,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					exit(ret);
 				}
 			} else {
-				s->n_dropped_frames++;
+				s->duration_dropped_pkts += s->pkts[i].duration;
 			}
 			
 			av_free_packet(&s->pkts[i]);
@@ -418,8 +419,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			ts = frame_pts2ts(pr, s, s->frames[i]);
 			
 			// calculate new PTS
-			s->frames[i]->pts -= s->n_dropped_frames *
-					av_rescale_q(s->frames[i]->pkt_duration, 
+			s->frames[i]->pts -= av_rescale_q(s->duration_dropped_pkts, 
 						pr->in_fctx->streams[s->stream_index]->time_base,
 						pr->in_fctx->streams[s->stream_index]->codec->time_base);
 			
@@ -441,7 +441,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				
 				frame_written = 1;
 			} else {
-				s->n_dropped_frames++;
+				s->duration_dropped_pkts += s->frames[i]->pkt_duration;
 				av_frame_free(&s->frames[i]);
 			}
 		}
@@ -537,7 +537,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->stop_reading_stream = 1;
 			
 			if (ts_included(pr, ts)) {
-				s->pkts[i].pts -= s->n_dropped_frames * s->pkts[i].duration;
+				s->pkts[i].pts -= s->duration_dropped_pkts;
 				
 				// calculate duration precisely to avoid deviation between PTS and DTS
 				double dur = s->pkts[i].duration * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base) /
@@ -573,7 +573,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					exit(ret);
 				}
 			} else {
-				s->n_dropped_frames++;
+				s->duration_dropped_pkts += s->pkts[i].duration;
 			}
 			
 			av_free_packet(&s->pkts[i]);
