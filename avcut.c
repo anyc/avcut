@@ -278,7 +278,7 @@ char find_packet_for_frame(struct packet_buffer *s, size_t frame_idx, size_t *pa
 			frame_idx, s->frames[frame_idx]->coded_picture_number);
 	
 	for (i=0;i<s->n_pkts;i++) {
-		av_log(NULL, AV_LOG_DEBUG, "%zu %zu %zu %zu - %d %d - %d (NOPTS: %zu)\n",
+		av_log(NULL, AV_LOG_DEBUG, "%" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " - %d %d - %d (NOPTS: %" PRId64 ")\n",
 				s->pkts[i].pts, s->pkts[i].dts, s->frames[frame_idx]->pkt_dts,
 				s->frames[frame_idx]->pkt_pts,
 				s->frames[frame_idx]->pkt_size, s->pkts[i].size,
@@ -517,7 +517,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				
 				av_log(NULL, AV_LOG_DEBUG, "pkt_pts pkt_dts frame->pkt_dts frame->pkt_pts - frame->pkt_size pkt_size - cpn\n");
 				for (j=0;j<s->n_frames;j++) {
-					av_log(NULL, AV_LOG_DEBUG, "%zu %zu %zu %zu - %6d %6d - %d type: %c (NOPTS: %zu)\n",
+					av_log(NULL, AV_LOG_DEBUG, "%" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " - %6d %6d - %d type: %c (NOPTS: %" PRId64 ")\n",
 						s->pkts[i].pts, s->pkts[i].dts, s->frames[j]->pkt_dts,
 						s->frames[j]->pkt_pts,
 						s->frames[j]->pkt_size, s->pkts[i].size,
@@ -664,10 +664,10 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			// override the PTS (copied from DTS) in such a case to provide
 			// an increasing PTS
 			if (frame->pts < sbuffer->last_pts) {
-				uint64_t new_pts = sbuffer->last_pts + av_rescale_q(frame->pkt_duration,
+				int64_t new_pts = sbuffer->last_pts + av_rescale_q(frame->pkt_duration,
 					pr->in_fctx->streams[stream_index]->time_base,
 					pr->in_fctx->streams[stream_index]->codec->time_base);
-				av_log(NULL, AV_LOG_DEBUG, "adjusting frame PTS from %ld to %ld\n", frame->pts, new_pts);
+				av_log(NULL, AV_LOG_DEBUG, "adjusting frame PTS from %" PRId64 " to %" PRId64 "\n", frame->pts, new_pts);
 				frame->pts = new_pts;
 			}
 			
