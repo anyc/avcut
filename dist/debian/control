@@ -1,0 +1,13 @@
+Source: avcut
+Section: video
+Priority: optional
+Maintainer: Mario Kicherer <dev@kicherer.org>
+Build-Depends: libavcodec-ffmpeg-dev, libavformat-ffmpeg-dev, libavutil-ffmpeg-dev
+Standards-Version: 3.9.4
+Vcs-Git: git://github.com/anyc/avcut.git
+Vcs-Browser: https://github.com/anyc/avcut
+
+Package: avcut
+Architecture: i386 amd64 armhf
+Depends: libavcodec-ffmpeg, libavformat-ffmpeg, libavutil-ffmpeg
+Description: Frame-accurate video cutting with only small quality loss

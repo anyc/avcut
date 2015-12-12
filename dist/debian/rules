@@ -1,0 +1,14 @@
+#! /usr/bin/make -f
+
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/default.mk
+
+DESTDIR=$(CURDIR)/debian/tmp
+
+%:
+	dh $@ 
+
+override_dh_install:
+#	mkdir -p "$(DESTDIR)/usr/bin/"
+#	dh_install avcut "$(DESTDIR)/usr/bin/avcut"
+	dh_install avcut "/usr/bin/"
