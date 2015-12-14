@@ -1,7 +1,8 @@
 
 APP=avcut
+AVCUT_VERSION=0.1
 
-CFLAGS+=-Wall
+CFLAGS+=-Wall -DAVCUT_VERSION=\"$(AVCUT_VERSION)\"
 LDLIBS=-lavcodec -lavformat -lavutil
 
 ## enable support for libav (EXPERIMENTAL)
@@ -31,7 +32,7 @@ install: $(APP)
 	install -m 644 README.md $(DESTDIR)$(PREFIX)/share/doc/$(APP)/
 
 package: $(APP)
-	$(TAR) -czf avcut$(PKG_VERSION)-$(ARCH).tar.gz avcut README.md LICENSE
+	$(TAR) -czf avcut-$(AVCUT_VERSION)-$(ARCH).tar.gz avcut README.md LICENSE
 
 debug: CFLAGS+=-g -DDEBUG
 debug: all

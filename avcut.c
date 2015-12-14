@@ -713,7 +713,8 @@ int main(int argc, char **argv) {
 	struct project *pr;
 	
 	if (argc < 3) {
-		av_log(NULL, AV_LOG_ERROR, "Usage: %s <input file> <output file> [<drop_from_ts> <continue_with_ts> ...]\n", argv[0]);
+		av_log(NULL, AV_LOG_INFO, "avcut-" AVCUT_VERSION " - Frame-accurate video cutting with only small quality loss\n\n");
+		av_log(NULL, AV_LOG_INFO, "Usage: %s <input file> <output file> [<drop_from_ts> <continue_with_ts> ...]\n", argv[0]);
 		return 1;
 	}
 	
@@ -749,6 +750,10 @@ int main(int argc, char **argv) {
 	
 	#ifdef DEBUG
 	av_log_set_level(AV_LOG_DEBUG);
+	#else
+	if (getenv("AVCUT_VERBOSITY")) {
+		av_log_set_level(atoi(getenv("AVCUT_VERBOSITY")));
+	}
 	#endif
 	
 	av_register_all();
@@ -1120,52 +1125,51 @@ int main(int argc, char **argv) {
 	av_log(NULL, AV_LOG_INFO, "Other packets read: %zu\n", pr->other_packets_read);
 	av_log(NULL, AV_LOG_INFO, "Other packets written: %zu\n", pr->other_packets_written);
 	
-	{
+	if (pr->n_cuts > 0) {
 		struct stat st;
 		size_t size;
 		
 		stat(inputf, &st);
 		size = st.st_size;
 		stat(outputf, &st);
-		av_log(NULL, AV_LOG_INFO, "\nFile size reduction: %f MB\n", (size - st.st_size) / (double) (1000*1000) );
-	}
-	
-	// print some info to check the cutpoints of the resulting video
-	av_log(NULL, AV_LOG_INFO, "\ncutting points in \"%s\" at: ", outputf);
-	double removed = 0;
-	for (i=0;i<pr->n_cuts;i+=2) {
-		double c = pr->cuts[i]-removed;
-		av_log(NULL, AV_LOG_INFO, "%fs (%um %2us) ", c, (unsigned int)c/60, (unsigned int)c % 60);
+		av_log(NULL, AV_LOG_INFO, "\nFile size reduction: %f MB\n", (size - (double) st.st_size) / (1000*1000) );
 		
+		// print some info to check the cutpoints of the resulting video
+		av_log(NULL, AV_LOG_INFO, "\ncutting points in \"%s\" at: ", outputf);
+		double removed = 0;
+		for (i=0;i<pr->n_cuts;i+=2) {
+			double c = pr->cuts[i]-removed;
+			av_log(NULL, AV_LOG_INFO, "%fs (%um %2us) ", c, (unsigned int)c/60, (unsigned int)c % 60);
+			
+			#ifdef CREATE_CHECK_SCRIPT
+			fprintf(check_script, "%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
+			#endif
+			
+			removed += pr->cuts[i+1] - pr->cuts[i];
+		}
+		av_log(NULL, AV_LOG_INFO, "\n");
+		
+		printf("\nYou can check the cutting points with:\nmpv \"edl://");
 		#ifdef CREATE_CHECK_SCRIPT
-		fprintf(check_script, "%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
+		FILE *check_script = fopen("avcut_check_cutpoints.sh", "a");
+		fprintf(check_script, "mpv \"edl://");
 		#endif
-		
-		removed += pr->cuts[i+1] - pr->cuts[i];
-	}
-	av_log(NULL, AV_LOG_INFO, "\n");
-	
-	
-	printf("\nYou can check the cutting points with:\nmpv \"edl://");
-	#ifdef CREATE_CHECK_SCRIPT
-	FILE *check_script = fopen("avcut_check_cutpoints.sh", "a");
-	fprintf(check_script, "mpv \"edl://");
-	#endif
-	removed = 0;
-	for (i=0;i<pr->n_cuts;i+=2) {
-		double c = pr->cuts[i]-removed;
-		
-		printf("%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
+		removed = 0;
+		for (i=0;i<pr->n_cuts;i+=2) {
+			double c = pr->cuts[i]-removed;
+			
+			printf("%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
+			#ifdef CREATE_CHECK_SCRIPT
+			fprintf(check_script, "%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
+			#endif
+			
+			removed += pr->cuts[i+1] - pr->cuts[i];
+		}
 		#ifdef CREATE_CHECK_SCRIPT
-		fprintf(check_script, "%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
+		fprintf(check_script, "\"\n\n");
 		#endif
-		
-		removed += pr->cuts[i+1] - pr->cuts[i];
+		printf("\"\n");
 	}
-	#ifdef CREATE_CHECK_SCRIPT
-	fprintf(check_script, "\"\n\n");
-	#endif
-	printf("\"\n");
 	
 	av_freep(&pr->cuts);
 	av_freep(&sbuffer);
