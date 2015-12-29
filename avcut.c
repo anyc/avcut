@@ -1128,6 +1128,7 @@ int main(int argc, char **argv) {
 	if (pr->n_cuts > 0) {
 		struct stat st;
 		size_t size;
+		FILE *check_script = 0;
 		
 		stat(inputf, &st);
 		size = st.st_size;
@@ -1141,33 +1142,31 @@ int main(int argc, char **argv) {
 			double c = pr->cuts[i]-removed;
 			av_log(NULL, AV_LOG_INFO, "%fs (%um %2us) ", c, (unsigned int)c/60, (unsigned int)c % 60);
 			
-			#ifdef CREATE_CHECK_SCRIPT
-			fprintf(check_script, "%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
-			#endif
-			
 			removed += pr->cuts[i+1] - pr->cuts[i];
 		}
 		av_log(NULL, AV_LOG_INFO, "\n");
 		
 		printf("\nYou can check the cutting points with:\nmpv \"edl://");
-		#ifdef CREATE_CHECK_SCRIPT
-		FILE *check_script = fopen("avcut_check_cutpoints.sh", "a");
-		fprintf(check_script, "mpv \"edl://");
-		#endif
+		
+		if (getenv("AVCUT_CHECK_SCRIPT") && atoi(getenv("AVCUT_CHECK_SCRIPT"))) {
+			check_script = fopen("avcut_check_cutpoints.sh", "a");
+			fprintf(check_script, "mpv \"edl://");
+		}
+		
 		removed = 0;
 		for (i=0;i<pr->n_cuts;i+=2) {
 			double c = pr->cuts[i]-removed;
 			
 			printf("%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
-			#ifdef CREATE_CHECK_SCRIPT
-			fprintf(check_script, "%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
-			#endif
+			
+			if (check_script)
+				fprintf(check_script, "%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
 			
 			removed += pr->cuts[i+1] - pr->cuts[i];
 		}
-		#ifdef CREATE_CHECK_SCRIPT
-		fprintf(check_script, "\"\n\n");
-		#endif
+		if (check_script)
+			fprintf(check_script, "\"\n\n");
+		
 		printf("\"\n");
 	}
 	
