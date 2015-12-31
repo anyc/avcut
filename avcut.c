@@ -1127,7 +1127,7 @@ int main(int argc, char **argv) {
 	
 	if (pr->n_cuts > 0) {
 		struct stat st;
-		size_t size;
+		size_t size, outputf_len;
 		FILE *check_script = 0;
 		
 		stat(inputf, &st);
@@ -1153,11 +1153,12 @@ int main(int argc, char **argv) {
 			fprintf(check_script, "mpv \"edl://");
 		}
 		
+		outputf_len = strlen(outputf);
 		removed = 0;
 		for (i=0;i<pr->n_cuts;i+=2) {
 			double c = pr->cuts[i]-removed;
 			
-			printf("%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
+			printf("%%%zu%%%s,%f,%f;", outputf_len, outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
 			
 			if (check_script)
 				fprintf(check_script, "%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));

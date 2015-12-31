@@ -69,7 +69,7 @@ Environment variables
 
 avcut recognizes the following environment variables:
 
-* AVCUT_VERBOSITY=<int> sets the verbosity of avcut. See the
+* AVCUT_VERBOSITY=\<int\> sets the verbosity of avcut. See the
   [FFmpeg documentation](https://www.ffmpeg.org/doxygen/2.8/log_8h.html)
   for possible values.
 * Setting AVCUT_CHECK_SCRIPT to an arbitrary value causes avcut to create a
