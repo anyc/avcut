@@ -1161,7 +1161,7 @@ int main(int argc, char **argv) {
 			printf("%%%zu%%%s,%f,%f;", outputf_len, outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
 			
 			if (check_script)
-				fprintf(check_script, "%s,%f,%f;", outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
+				fprintf(check_script, "%%%zu%%%s,%f,%f;", outputf_len, outputf, (c>=10 ? c-10 : 0 ), (c>=10 ? 20 : c + 10));
 			
 			removed += pr->cuts[i+1] - pr->cuts[i];
 		}
