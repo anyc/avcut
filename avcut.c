@@ -119,7 +119,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		av_log(NULL, AV_LOG_DEBUG, "enc frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
 			frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
 			frame->pts*ostream->codec->time_base.num/(double)ostream->codec->time_base.den
- 			);
+			);
 	
 	av_init_packet(&enc_pkt);
 	
@@ -448,7 +448,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				
 				frame_written = 1;
 			} else {
-				s->duration_dropped_pkts += s->frames[i]->pkt_duration;
+				s->duration_dropped_pkts += av_frame_get_pkt_duration(s->frames[i]);
 				av_frame_free(&s->frames[i]);
 			}
 		}
@@ -624,12 +624,6 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			av_log(NULL, AV_LOG_ERROR, "error while allocating frame\n");
 			return AVERROR(ENOMEM);
 		}
-// 		for (i=0;i<16;i++) printf("%x ", packet->data[i] ); printf("\n");
-// 		for (i=0;i<16;i++) printf("%3d ", packet->data[i] ); printf("\n");
-// 		int fragment_type = packet->data[4] & 0x1F;
-// 		int nal_type = packet->data[5] & 0x1F;
-// 		int start_bit = packet->data[5] & 0x80;
-// 		printf("%d %d %d\n", fragment_type, nal_type, start_bit);
 		
 		ret = avcodec_decode_video2(pr->in_fctx->streams[stream_index]->codec, frame, &got_frame, packet);
 		
@@ -680,27 +674,20 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			
 			// the first packet in the video buffer is an I frame, if the
 			// current packet contains another I frame, flush the buffer
-			if (sbuffer[stream_index].n_frames > 1) {
-				switch (frame->pict_type) {
-					case AV_PICTURE_TYPE_I:
-						if (pr->last_flush == 1)
-							pr->stop_reading = 1;
-						
-						char n_finished_streams = 0;
-						for (i = 0; i < pr->n_stream_ids; i++) {
-							flush_packet_buffer(pr, &sbuffer[i], 0);
-// 							printf("%d\n", sbuffer[i].stop_reading_stream);
-							if (sbuffer[i].stop_reading_stream)
-								n_finished_streams++;
-						}
-// 						printf("%d %d %d\n", n_finished_streams, pr->n_stream_ids, pr->stop_reading);
-						if (n_finished_streams == pr->n_stream_ids)
-							pr->last_flush = 1;
-						break;
-					case AV_PICTURE_TYPE_B:
-					case AV_PICTURE_TYPE_P:
-					default: break;
+			if (sbuffer[stream_index].n_frames > 1 && frame->key_frame) {
+				if (pr->last_flush == 1)
+					pr->stop_reading = 1;
+				
+				char n_finished_streams = 0;
+				for (i = 0; i < pr->n_stream_ids; i++) {
+					flush_packet_buffer(pr, &sbuffer[i], 0);
+					
+					if (sbuffer[i].stop_reading_stream)
+						n_finished_streams++;
 				}
+				
+				if (n_finished_streams == pr->n_stream_ids)
+					pr->last_flush = 1;
 			}
 		} else {
 			av_frame_free(&frame);
