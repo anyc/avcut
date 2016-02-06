@@ -118,7 +118,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 	if (frame)
 		av_log(NULL, AV_LOG_DEBUG, "enc frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
 			frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
-			frame->pts*ostream->codec->time_base.num/(double)ostream->codec->time_base.den
+			frame->pts * av_q2d(ostream->codec->time_base)
 			);
 	
 	av_init_packet(&enc_pkt);
@@ -191,8 +191,12 @@ char ts_included(struct project *pr, double ts) {
 	return 1;
 }
 
+#define BUF_COPY_COMPLETE 1<<0
+#define BUF_DROP_COMPLETE 1<<1
+#define BUF_CUT_IN_BETWEEN 1<<2
+
 // check if the complete buffer will be used or if a cutpoint lies in this interval
-char is_buffer_uncut(struct project *pr, struct packet_buffer *s, unsigned long last_iframe) {
+char get_buffer_processing_mode(struct project *pr, struct packet_buffer *s, unsigned long last_iframe) {
 	double buf_start, buf_end;
 	size_t i;
 	
@@ -209,18 +213,24 @@ char is_buffer_uncut(struct project *pr, struct packet_buffer *s, unsigned long 
 	for (i=0; i < pr->n_cuts; i++) {
 		// check if any cutpoint lies between buffer start and end
 		if (buf_start < pr->cuts[i] && pr->cuts[i] < buf_end)
-			return 0;
+			return BUF_CUT_IN_BETWEEN;
 		
 		// check if buffer lies between cutpoints
-		if ((i % 2 == 0) && (pr->cuts[i] <= buf_start && buf_end <= pr->cuts[i+1]))
-			return 0;
+		if (pr->cuts[i] <= buf_start && buf_end <= pr->cuts[i+1]) {
+			if (i % 2 == 0)
+				return BUF_DROP_COMPLETE;
+			else
+				return BUF_COPY_COMPLETE;
+		}
 		
 		// stop if further cuts lie behind current buffer
 		if (buf_end < pr->cuts[i])
-			return 1;
+			return BUF_COPY_COMPLETE;
 	}
 	
-	return 1;
+	av_log(NULL, AV_LOG_ERROR, "cannot determine processing mode\n");
+	
+	return -1;
 }
 
 // get the number of dropped frames prior to source timestamp $ts
@@ -298,7 +308,7 @@ char find_packet_for_frame(struct packet_buffer *s, size_t frame_idx, size_t *pa
 void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_flush) {
 	size_t i, j, last_pkt;
 	int ret;
-	char copy_complete_buffer = 0;
+	char buffer_mode = 0;
 	double ts;
 	size_t last_frame;
 	
@@ -307,8 +317,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		return;
 	
 	if (pr->in_fctx->streams[s->stream_index]->codec->codec_type != AVMEDIA_TYPE_VIDEO) {
-		// check if we can copy the complete buffer or if we have to check each packet individually
-		copy_complete_buffer = is_buffer_uncut(pr, s, 0);
+		// check if we can copy/drop the complete buffer or if we have to check each packet individually
+		buffer_mode = get_buffer_processing_mode(pr, s, 0);
 		
 		for (i=0;i<s->n_pkts;i++) {
 			ts = s->pkts[i].pts * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base);
@@ -316,7 +326,10 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			if (pr->stop_after_ts < ts)
 				s->stop_reading_stream = 1;
 			
-			if (copy_complete_buffer || ts_included(pr, ts)) {
+			if   ( !( buffer_mode & BUF_DROP_COMPLETE) &&
+					( (buffer_mode & BUF_COPY_COMPLETE) || ts_included(pr, ts) )
+				)
+			{
 				s->pkts[i].pts -= s->duration_dropped_pkts;
 				
 				// calculate duration precisely to avoid deviation between PTS and DTS
@@ -361,9 +374,9 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			last_frame = s->n_frames-2;
 		
 		// check if we can copy the complete buffer or if we have to check each packet individually
-		copy_complete_buffer = is_buffer_uncut(pr, s, last_frame);
+		buffer_mode = get_buffer_processing_mode(pr, s, last_frame);
 	} else {
-		copy_complete_buffer = 1;
+		buffer_mode = BUF_COPY_COMPLETE;
 	}
 	
 	// determine the last packet we have to look at for this GOP
@@ -404,7 +417,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				last_pkt = pkt_idx;
 		}
 		
-		if (!copy_complete_buffer) {
+		if (buffer_mode & BUF_CUT_IN_BETWEEN) {
 			// if we encode all frames we don't need the original packets
 			for (i=0;i<=last_pkt;i++)
 				av_free_packet(&s->pkts[i]);
@@ -413,7 +426,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 	
 	// TODO: check if we can simply cut if the last frame is a P-frame
 	
-	if (!copy_complete_buffer) {
+	if (buffer_mode & BUF_CUT_IN_BETWEEN) {
 		char frame_written = 0;
 		
 		// check which frames will be included and encode them
@@ -426,7 +439,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			ts = frame_pts2ts(pr, s, s->frames[i]);
 			
 			// calculate new PTS
-			s->frames[i]->pts -= av_rescale_q(s->duration_dropped_pkts, 
+			s->frames[i]->pts -= av_rescale_q(s->duration_dropped_pkts,
 						pr->in_fctx->streams[s->stream_index]->time_base,
 						pr->in_fctx->streams[s->stream_index]->codec->time_base);
 			
@@ -485,7 +498,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			out_cctx->codec->close(out_cctx);
 			out_cctx->codec->init(out_cctx);
 		}
-	} else {
+	} else
+	if (buffer_mode & BUF_COPY_COMPLETE) {
 		for (i=0;i<=last_pkt;i++) {
 			AVFrame *frame;
 			
@@ -585,6 +599,15 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			
 			av_free_packet(&s->pkts[i]);
 		}
+		
+		for (j=0;j<s->n_frames-1;j++)
+			av_frame_free(&s->frames[j]);
+	} else {
+		for (i=0;i<=last_pkt;i++) {
+			s->duration_dropped_pkts += s->pkts[i].duration;
+			av_free_packet(&s->pkts[i]);
+		}
+		
 		for (j=0;j<s->n_frames-1;j++)
 			av_frame_free(&s->frames[j]);
 	}
@@ -653,7 +676,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				frame->pts = frame->pkt_dts;
 			#endif
 			
-			// convert from packet to frame time_base, if necessary
+// 			// convert from packet to frame time_base, if necessary
 			if (frame->pts == frame->pkt_dts || frame->pts == frame->pkt_pts)
 				frame->pts = av_rescale_q(frame->pts,
 							pr->in_fctx->streams[stream_index]->time_base,
