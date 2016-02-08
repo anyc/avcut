@@ -1,6 +1,6 @@
 
 APP=avcut
-AVCUT_VERSION=0.1
+AVCUT_VERSION=0.2
 
 CFLAGS+=-Wall -DAVCUT_VERSION=\"$(AVCUT_VERSION)\"
 LDLIBS=-lavcodec -lavformat -lavutil

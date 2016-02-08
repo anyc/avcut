@@ -676,7 +676,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				frame->pts = frame->pkt_dts;
 			#endif
 			
-// 			// convert from packet to frame time_base, if necessary
+			// convert from packet to frame time_base, if necessary
 			if (frame->pts == frame->pkt_dts || frame->pts == frame->pkt_pts)
 				frame->pts = av_rescale_q(frame->pts,
 							pr->in_fctx->streams[stream_index]->time_base,
