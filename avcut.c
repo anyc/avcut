@@ -26,6 +26,7 @@
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <libavutil/opt.h>
 
 #define AVCUT_DUMP_CHAR(var, length) { size_t i; for (i=0; i<(length); i++) { printf("%x ", ((char*) (var))[i]); } printf("\n"); }
 
@@ -913,17 +914,38 @@ int main(int argc, char **argv) {
 				av_log(NULL, AV_LOG_ERROR, "Encoder not found\n");
 				return AVERROR_INVALIDDATA;
 			}
-			
-			ret = avcodec_copy_context(enc_cctx, dec_cctx);
+						
+			ret = avcodec_get_context_defaults3(enc_cctx, encoder);
 			if (ret < 0) {
-				av_log(NULL, AV_LOG_ERROR, "Copying stream context failed\n");
+				av_log(NULL, AV_LOG_ERROR, "Setting codec defaults failed\n");
 				return ret;
 			}
 			
+			//copy some values from decoder context
+			enc_cctx->time_base = dec_cctx->time_base;
+			enc_cctx->ticks_per_frame = dec_cctx->ticks_per_frame;
+			enc_cctx->delay = dec_cctx->delay;
+			enc_cctx->width = dec_cctx->width;
+			enc_cctx->height = dec_cctx->height;
+			enc_cctx->pix_fmt = dec_cctx->pix_fmt;
+			enc_cctx->sample_aspect_ratio = dec_cctx->sample_aspect_ratio;
+			enc_cctx->color_primaries = dec_cctx->color_primaries;
+                        enc_cctx->color_trc = dec_cctx->color_trc;
+                        enc_cctx->colorspace = dec_cctx->colorspace;
+                        enc_cctx->color_range = dec_cctx->color_range;
+                        enc_cctx->chroma_sample_location = dec_cctx->chroma_sample_location;
+                        enc_cctx->profile = dec_cctx->profile;
+                        enc_cctx->level = dec_cctx->level;
+                        
+			av_opt_set(enc_cctx->priv_data, "preset", "medium", AV_OPT_SEARCH_CHILDREN);
+			av_opt_set(enc_cctx->priv_data, "tune", "film", AV_OPT_SEARCH_CHILDREN);
+			av_opt_set(enc_cctx->priv_data, "x264opts", "direct=auto:aq-mode=3:force-cfr=1:b-adapt=2:rc-lookahead=60:weightp=0", 
+AV_OPT_SEARCH_CHILDREN);
+			
 			// TODO good values?
-			enc_cctx->qmin = 16;
-			enc_cctx->qmax = 26;
-			enc_cctx->max_qdiff = 4;
+			//enc_cctx->qmin = 16;
+			//enc_cctx->qmax = 26;
+			//enc_cctx->max_qdiff = 4;
 			if (dec_cctx->has_b_frames) {
 				enc_cctx->max_b_frames = 3;
 				if (pr->has_b_frames < dec_cctx->has_b_frames)
