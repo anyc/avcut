@@ -160,7 +160,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		}
 		
 		av_frame_free(&frame);
-		av_free_packet(&enc_pkt);
+		av_packet_unref(&enc_pkt);
 	}
 	
 	if (got_frame_p)
@@ -358,7 +358,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->duration_dropped_pkts += s->pkts[i].duration;
 			}
 			
-			av_free_packet(&s->pkts[i]);
+			av_packet_unref(&s->pkts[i]);
 		}
 		
 		s->n_pkts = 0;
@@ -420,7 +420,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		if (buffer_mode & BUF_CUT_IN_BETWEEN) {
 			// if we encode all frames we don't need the original packets
 			for (i=0;i<=last_pkt;i++)
-				av_free_packet(&s->pkts[i]);
+				av_packet_unref(&s->pkts[i]);
 		}
 	}
 	
@@ -597,7 +597,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->duration_dropped_pkts += s->pkts[i].duration;
 			}
 			
-			av_free_packet(&s->pkts[i]);
+			av_packet_unref(&s->pkts[i]);
 		}
 		
 		for (j=0;j<s->n_frames-1;j++)
@@ -605,7 +605,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 	} else {
 		for (i=0;i<=last_pkt;i++) {
 			s->duration_dropped_pkts += s->pkts[i].duration;
-			av_free_packet(&s->pkts[i]);
+			av_packet_unref(&s->pkts[i]);
 		}
 		
 		for (j=0;j<s->n_frames-1;j++)
