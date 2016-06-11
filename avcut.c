@@ -807,7 +807,7 @@ int main(int argc, char **argv) {
 			}
 			
 			// detect h264 format
-			if (codec_ctx->codec_id == CODEC_ID_H264 && codec_ctx->extradata_size > 2) {
+			if (codec_ctx->codec_id == AV_CODEC_ID_H264 && codec_ctx->extradata_size > 2) {
 				char nalu_start_code1[] = {0x0,0x0,0x1};
 				char nalu_start_code2[] = {0x0,0x0,0x0,0x1};
 				
