@@ -2,8 +2,16 @@
 APP=avcut
 AVCUT_VERSION=0.2
 
+ifneq ($(CROSS_COMPILE),)
+	CC=$(CROSS_COMPILE)gcc
+	LD=$(CROSS_CoMPILE)ld
+	PKG_CONFIG=$(CROSS_COMPILE)pkg-config
+else
+	PKG_CONFIG?=pkg-config
+endif
+
 CFLAGS+=-Wall -DAVCUT_VERSION=\"$(AVCUT_VERSION)\"
-LDLIBS=-lavcodec -lavformat -lavutil
+LDLIBS=$(shell for x in libavcodec libavformat libavutil; do $(PKG_CONFIG) --libs $(PC_FLAGS) "$$x"; done)
 
 ## enable support for libav (EXPERIMENTAL)
 #CFLAGS=-DUSING_LIBAV
@@ -32,3 +40,8 @@ package: $(APP)
 
 debug: CFLAGS+=-g -DDEBUG
 debug: all
+
+static: CFLAGS+=-static
+static: PC_FLAGS=--static
+static: all
+
