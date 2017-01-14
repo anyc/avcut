@@ -23,6 +23,7 @@
 #include <string.h>
 #include <float.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -55,11 +56,19 @@ struct packet_buffer {
 				// last two frames may have a zero DTS
 };
 
+struct profile {
+	char *preset;
+	char *tune;
+	char *x264opts;
+};
+
 // project state context
 struct project {
 	AVFormatContext *in_fctx;
 	AVFormatContext *out_fctx;
 	char has_b_frames;
+	
+	struct profile *profile;
 	
 	unsigned int n_stream_ids; // number of streams in output file
 	unsigned int *stream_ids; // mapping of output stream to input stream
@@ -721,43 +730,131 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 	return got_frame;
 }
 
+int parse_profile(struct project *pr, char *profile) {
+	FILE *f;
+	int r;
+	size_t slen;
+	char key[1024], value[1024];
+	
+	slen = strlen(profile);
+	
+	if (!strcmp(&profile[slen-8], ".profile")) {
+		f = fopen(profile, "r");
+		if (!f) {
+			av_log(NULL, AV_LOG_ERROR, "cannot open profile \"%s\": %s\n", profile, strerror(errno));
+			return 1;
+		}
+	} else {
+		snprintf(key, 1024, "%s%s.profile", AVCUT_PROFILE_DIRECTORY, profile);
+		
+		f = fopen(key, "r");
+		if (!f) {
+			av_log(NULL, AV_LOG_ERROR, "cannot open profile \"%s\": %s\n", key, strerror(errno));
+			return 1;
+		}
+	}
+	
+	pr->profile = (struct profile*) calloc(1, sizeof(struct profile));
+	
+	while (!feof(f)) {
+		r = fscanf(f, "%1024[^=;\n]=%1024[^;\n]", key, value);
+		
+		if (r != 2) {
+			av_log(NULL, AV_LOG_ERROR, "error while parsing profile\n");
+			free(pr->profile);
+			pr->profile = 0;
+			return 1;
+		}
+		fscanf(f, " \n");
+		
+		if (!strcmp(key, "preset")) {
+			pr->profile->preset = strdup(value);
+		} else
+		if (!strcmp(key, "tune")) {
+			pr->profile->tune = strdup(value);
+		} else 
+		if (!strcmp(key, "x264opts")) {
+			pr->profile->x264opts = strdup(value);
+		} else {
+			av_log(NULL, AV_LOG_INFO, "unknown profile key: %s = %s\n", key, value);
+		}
+	}
+	
+	fclose(f);
+	
+	return 0;
+}
+
+void help() {
+	av_log(NULL, AV_LOG_INFO, "avcut-" AVCUT_VERSION " - Frame-accurate video cutting with only small quality loss\n");
+	av_log(NULL, AV_LOG_INFO, "\n");
+	av_log(NULL, AV_LOG_INFO, "Usage: avcut [options] [<drop_from_ts> <continue_with_ts> ...]\n");
+	av_log(NULL, AV_LOG_INFO, "\n");
+	av_log(NULL, AV_LOG_INFO, "Options:\n");
+	av_log(NULL, AV_LOG_INFO, "\n");
+	av_log(NULL, AV_LOG_INFO, "  -i <file>     Input file\n");
+	av_log(NULL, AV_LOG_INFO, "  -o <file>     Output file\n");
+	av_log(NULL, AV_LOG_INFO, "  -p <profile>  Use this encoding profile\n");
+}
+
 int main(int argc, char **argv) {
 	unsigned int i, j;
-	int ret;
-	char *inputf, *outputf;
+	int ret, opt;
+	char *inputf, *outputf, *profile;
 	struct project project;
 	struct project *pr;
 	
-	if (argc < 3) {
-		av_log(NULL, AV_LOG_INFO, "avcut-" AVCUT_VERSION " - Frame-accurate video cutting with only small quality loss\n\n");
-		av_log(NULL, AV_LOG_INFO, "Usage: %s <input file> <output file> [<drop_from_ts> <continue_with_ts> ...]\n", argv[0]);
+	
+	inputf = 0;
+	outputf = 0;
+	profile = 0;
+	while ((opt = getopt (argc, argv, "hi:o:p:")) != -1) {
+		switch (opt) {
+			case 'h':
+				help();
+				return 0;
+			case 'i':
+				inputf = optarg;
+				break;
+			case 'o':
+				outputf = optarg;
+				break;
+			case 'p':
+				profile = optarg;
+				break;
+			default:
+				help();
+				return 1;
+		}
+	}
+	
+	if (!inputf || !outputf) {
+		av_log(NULL, AV_LOG_ERROR, "please specify an input and output file\n");
+		help();
 		return 1;
 	}
 	
-	if (argc % 2 != 1) {
+	if ((optind - argc) % 2 != 0) {
 		av_log(NULL, AV_LOG_ERROR, "only even number of cut points allowed\n");
-		av_log(NULL, AV_LOG_ERROR, "Usage: %s <input file> <output file> [<drop_from_ts> <continue_with_ts> ...]\n", argv[0]);
+		help();
 		return 1;
 	}
-	
-	inputf = argv[1];
-	outputf = argv[2];
 	
 	pr = &project;
 	memset(pr, 0, sizeof(struct project));
 	
-	pr->n_cuts = argc - 3;
+	pr->n_cuts = argc - optind;
 	pr->cuts = (double*) malloc(sizeof(double)*pr->n_cuts);
 	pr->stop_after_ts = DBL_MAX;
 	pr->last_flush = 0;
 	
-	for (i=3; i < argc; i++) {
+	for (i=optind; i < argc; i++) {
 		char *end;
-		if ((i % 2 == 0) && !strcmp(argv[i], "-")) {
-			pr->stop_after_ts = pr->cuts[i-4];
-			pr->cuts[i-3] = DBL_MAX;
+		if (((i - optind) % 2 == 1) && !strcmp(argv[i], "-")) {
+			pr->stop_after_ts = pr->cuts[i - optind - 1];
+			pr->cuts[i - optind] = DBL_MAX;
 		} else {
-			pr->cuts[i-3] = strtod(argv[i], &end);
+			pr->cuts[i - optind] = strtod(argv[i], &end);
 			if (end == argv[i] || *end != 0) {
 				av_log(NULL, AV_LOG_ERROR, "error while parsing cut point: %s\n", argv[i]);
 			}
@@ -771,6 +868,12 @@ int main(int argc, char **argv) {
 		av_log_set_level(atoi(getenv("AVCUT_VERBOSITY")));
 	}
 	#endif
+	
+	if (profile) {
+		ret = parse_profile(pr, profile);
+		if (ret)
+			return ret;
+	}
 	
 	av_register_all();
 	
@@ -914,38 +1017,50 @@ int main(int argc, char **argv) {
 				av_log(NULL, AV_LOG_ERROR, "Encoder not found\n");
 				return AVERROR_INVALIDDATA;
 			}
-						
-			ret = avcodec_get_context_defaults3(enc_cctx, encoder);
-			if (ret < 0) {
-				av_log(NULL, AV_LOG_ERROR, "Setting codec defaults failed\n");
-				return ret;
+			
+			if (pr->profile) {
+				ret = avcodec_get_context_defaults3(enc_cctx, encoder);
+				if (ret < 0) {
+					av_log(NULL, AV_LOG_ERROR, "Setting codec defaults failed\n");
+					return ret;
+				}
+				
+				enc_cctx->time_base = dec_cctx->time_base;
+				enc_cctx->ticks_per_frame = dec_cctx->ticks_per_frame;
+				enc_cctx->delay = dec_cctx->delay;
+				enc_cctx->width = dec_cctx->width;
+				enc_cctx->height = dec_cctx->height;
+				enc_cctx->pix_fmt = dec_cctx->pix_fmt;
+				enc_cctx->sample_aspect_ratio = dec_cctx->sample_aspect_ratio;
+				enc_cctx->color_primaries = dec_cctx->color_primaries;
+				enc_cctx->color_trc = dec_cctx->color_trc;
+				enc_cctx->colorspace = dec_cctx->colorspace;
+				enc_cctx->color_range = dec_cctx->color_range;
+				enc_cctx->chroma_sample_location = dec_cctx->chroma_sample_location;
+				enc_cctx->profile = dec_cctx->profile;
+				enc_cctx->level = dec_cctx->level;
+				
+				av_log(NULL, AV_LOG_INFO, "Settings from profile:\n");
+				av_log(NULL, AV_LOG_INFO, "  Preset: %s\n", pr->profile->preset);
+				av_log(NULL, AV_LOG_INFO, "  Tune: %s\n", pr->profile->tune);
+				av_log(NULL, AV_LOG_INFO, "  x264opts: %s\n", pr->profile->x264opts);
+				
+				av_opt_set(enc_cctx->priv_data, "preset", pr->profile->preset, AV_OPT_SEARCH_CHILDREN);
+				av_opt_set(enc_cctx->priv_data, "tune", pr->profile->tune, AV_OPT_SEARCH_CHILDREN);
+				av_opt_set(enc_cctx->priv_data, "x264opts", pr->profile->x264opts, AV_OPT_SEARCH_CHILDREN);
+			} else {
+				ret = avcodec_copy_context(enc_cctx, dec_cctx);
+				if (ret < 0) {
+					av_log(NULL, AV_LOG_ERROR, "Copying stream context failed\n");
+					return ret;
+				}
+				
+				// TODO good values?
+				enc_cctx->qmin = 16;
+				enc_cctx->qmax = 26;
+				enc_cctx->max_qdiff = 4;
 			}
 			
-			//copy some values from decoder context
-			enc_cctx->time_base = dec_cctx->time_base;
-			enc_cctx->ticks_per_frame = dec_cctx->ticks_per_frame;
-			enc_cctx->delay = dec_cctx->delay;
-			enc_cctx->width = dec_cctx->width;
-			enc_cctx->height = dec_cctx->height;
-			enc_cctx->pix_fmt = dec_cctx->pix_fmt;
-			enc_cctx->sample_aspect_ratio = dec_cctx->sample_aspect_ratio;
-			enc_cctx->color_primaries = dec_cctx->color_primaries;
-                        enc_cctx->color_trc = dec_cctx->color_trc;
-                        enc_cctx->colorspace = dec_cctx->colorspace;
-                        enc_cctx->color_range = dec_cctx->color_range;
-                        enc_cctx->chroma_sample_location = dec_cctx->chroma_sample_location;
-                        enc_cctx->profile = dec_cctx->profile;
-                        enc_cctx->level = dec_cctx->level;
-                        
-			av_opt_set(enc_cctx->priv_data, "preset", "medium", AV_OPT_SEARCH_CHILDREN);
-			av_opt_set(enc_cctx->priv_data, "tune", "film", AV_OPT_SEARCH_CHILDREN);
-			av_opt_set(enc_cctx->priv_data, "x264opts", "direct=auto:aq-mode=3:force-cfr=1:b-adapt=2:rc-lookahead=60:weightp=0", 
-AV_OPT_SEARCH_CHILDREN);
-			
-			// TODO good values?
-			//enc_cctx->qmin = 16;
-			//enc_cctx->qmax = 26;
-			//enc_cctx->max_qdiff = 4;
 			if (dec_cctx->has_b_frames) {
 				enc_cctx->max_b_frames = 3;
 				if (pr->has_b_frames < dec_cctx->has_b_frames)
