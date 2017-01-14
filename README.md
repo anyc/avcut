@@ -51,7 +51,18 @@ verbose output and debug symbols.
 Usage
 -----
 
-`Usage: avcut <input file> <output file> [<drop_from_ts> <continue_with_ts> ...]`
+```
+Usage: avcut [options] [<drop_from_ts> <continue_with_ts> ...]
+
+Options:
+
+  -i <file>     Input file
+  -o <file>     Output file
+  -p <profile>  Use this encoding profile. If <profile> ends with ".profile",
+                <profile> is used as a path to the profile file. If not, the profile
+                is loaded from the default profile directory:
+                   /home/anyc/Projekte/github/avcut/profiles/
+```
 
 Besides the input and output file, avcut expects a "blacklist", i.e. what should
 be dropped, as argument. This blacklist consists of timestamps that denote from
