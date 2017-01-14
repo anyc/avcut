@@ -793,7 +793,10 @@ void help() {
 	av_log(NULL, AV_LOG_INFO, "\n");
 	av_log(NULL, AV_LOG_INFO, "  -i <file>     Input file\n");
 	av_log(NULL, AV_LOG_INFO, "  -o <file>     Output file\n");
-	av_log(NULL, AV_LOG_INFO, "  -p <profile>  Use this encoding profile\n");
+	av_log(NULL, AV_LOG_INFO, "  -p <profile>  Use this encoding profile. If <profile> ends with \".profile\",\n");
+	av_log(NULL, AV_LOG_INFO, "                <profile> is used as a path to the profile file. If not, the profile\n");
+	av_log(NULL, AV_LOG_INFO, "                is loaded from the default profile directory:\n");
+	av_log(NULL, AV_LOG_INFO, "                   %s\n", AVCUT_PROFILE_DIRECTORY);
 }
 
 int main(int argc, char **argv) {
