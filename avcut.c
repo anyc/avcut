@@ -233,14 +233,13 @@ char get_buffer_processing_mode(struct project *pr, struct packet_buffer *s, uns
 				return BUF_COPY_COMPLETE;
 		}
 		
-		// stop if further cuts lie behind current buffer
+		// stop this loop if further cuts lie behind current buffer
 		if (buf_end < pr->cuts[i])
 			return BUF_COPY_COMPLETE;
 	}
 	
-	av_log(NULL, AV_LOG_ERROR, "cannot determine processing mode\n");
-	
-	return -1;
+	// if we are past all cutpoints, copy the remaining video
+	return BUF_COPY_COMPLETE;
 }
 
 // get the number of dropped frames prior to source timestamp $ts
