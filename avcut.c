@@ -797,6 +797,17 @@ void help() {
 	av_log(NULL, AV_LOG_INFO, "                <profile> is used as a path to the profile file. If not, the profile\n");
 	av_log(NULL, AV_LOG_INFO, "                is loaded from the default profile directory:\n");
 	av_log(NULL, AV_LOG_INFO, "                   %s\n", AVCUT_PROFILE_DIRECTORY);
+	av_log(NULL, AV_LOG_INFO, "\n");
+	av_log(NULL, AV_LOG_INFO, "Besides the input and output file, avcut expects a \"blacklist\", i.e. what should\n");
+	av_log(NULL, AV_LOG_INFO, "be dropped, as argument. This blacklist consists of timestamps that denote from\n");
+	av_log(NULL, AV_LOG_INFO, "where to where frames have to be dropped. The last argument can be a hyphen to\n");
+	av_log(NULL, AV_LOG_INFO, "indicate that all remaining frames shall be dropped.\n");
+	av_log(NULL, AV_LOG_INFO, "\n");
+	av_log(NULL, AV_LOG_INFO, "For example, to drop the frames of the first 10 seconds, the frames between\n");
+	av_log(NULL, AV_LOG_INFO, "55.5s and 130s and all frames after 140s in input.avi and write the result to\n");
+	av_log(NULL, AV_LOG_INFO, "output.mkv, the following command can be used:\n");
+	av_log(NULL, AV_LOG_INFO, "\n");
+	av_log(NULL, AV_LOG_INFO, "   avcut input.avi output.mkv 0 10 55.5 130 140 -\n");
 }
 
 int main(int argc, char **argv) {
