@@ -791,12 +791,14 @@ void help() {
 	av_log(NULL, AV_LOG_INFO, "\n");
 	av_log(NULL, AV_LOG_INFO, "Options:\n");
 	av_log(NULL, AV_LOG_INFO, "\n");
+	av_log(NULL, AV_LOG_INFO, "  -c            Create a shell script to check the cutpoints with mpv\n");
 	av_log(NULL, AV_LOG_INFO, "  -i <file>     Input file\n");
 	av_log(NULL, AV_LOG_INFO, "  -o <file>     Output file\n");
 	av_log(NULL, AV_LOG_INFO, "  -p <profile>  Use this encoding profile. If <profile> ends with \".profile\",\n");
 	av_log(NULL, AV_LOG_INFO, "                <profile> is used as a path to the profile file. If not, the profile\n");
 	av_log(NULL, AV_LOG_INFO, "                is loaded from the default profile directory:\n");
 	av_log(NULL, AV_LOG_INFO, "                   %s\n", AVCUT_PROFILE_DIRECTORY);
+	av_log(NULL, AV_LOG_INFO, "  -v <level>    Set verbosity level (see https://www.ffmpeg.org/doxygen/2.8/log_8h.html)\n");
 	av_log(NULL, AV_LOG_INFO, "\n");
 	av_log(NULL, AV_LOG_INFO, "Besides the input and output file, avcut expects a \"blacklist\", i.e. what should\n");
 	av_log(NULL, AV_LOG_INFO, "be dropped, as argument. This blacklist consists of timestamps that denote from\n");
@@ -812,16 +814,17 @@ void help() {
 
 int main(int argc, char **argv) {
 	unsigned int i, j;
-	int ret, opt;
-	char *inputf, *outputf, *profile;
+	int ret, opt, create_check_script;
+	char *inputf, *outputf, *profile, *verbosity_level;
 	struct project project;
 	struct project *pr;
 	
-	
+	create_check_script = 0;
+	verbosity_level = 0;
 	inputf = 0;
 	outputf = 0;
 	profile = 0;
-	while ((opt = getopt (argc, argv, "hi:o:p:")) != -1) {
+	while ((opt = getopt (argc, argv, "hi:o:p:v:c")) != -1) {
 		switch (opt) {
 			case 'h':
 				help();
@@ -834,6 +837,12 @@ int main(int argc, char **argv) {
 				break;
 			case 'p':
 				profile = optarg;
+				break;
+			case 'v':
+				verbosity_level = optarg;
+				break;
+			case 'c':
+				create_check_script = 1;
 				break;
 			default:
 				help();
@@ -877,9 +886,8 @@ int main(int argc, char **argv) {
 	#ifdef DEBUG
 	av_log_set_level(AV_LOG_DEBUG);
 	#else
-	if (getenv("AVCUT_VERBOSITY")) {
-		av_log_set_level(atoi(getenv("AVCUT_VERBOSITY")));
-	}
+	if (verbosity_level)
+		av_log_set_level(atoi(verbosity_level));
 	#endif
 	
 	if (profile) {
@@ -1313,7 +1321,7 @@ int main(int argc, char **argv) {
 		
 		printf("\nYou can check the cutting points with:\nmpv \"edl://");
 		
-		if (getenv("AVCUT_CHECK_SCRIPT") && atoi(getenv("AVCUT_CHECK_SCRIPT"))) {
+		if (create_check_script) {
 			check_script = fopen("avcut_check_cutpoints.sh", "a");
 			fprintf(check_script, "mpv \"edl://");
 		}

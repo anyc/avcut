@@ -7,7 +7,7 @@ AVCUT_VERSION=0.2
 ifneq ($(CROSS_COMPILE),)
 	CC=$(CROSS_COMPILE)gcc
 	LD=$(CROSS_CoMPILE)ld
-	PKG_CONFIG=$(CROSS_COMPILE)pkg-config
+	PKG_CONFIG?=$(CROSS_COMPILE)pkg-config
 else
 	PKG_CONFIG?=pkg-config
 endif
