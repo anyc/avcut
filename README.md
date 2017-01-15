@@ -77,15 +77,6 @@ output.mkv, the following command can be used:
 
 `avcut input.avi output.mkv 0 10 55.5 130 140 -`
 
-Environment variables
----------------------
-
-avcut recognizes the following environment variables:
-
-* AVCUT_VERBOSITY=\<int\> sets the verbosity of avcut. See the
-  [FFmpeg documentation](https://www.ffmpeg.org/doxygen/2.8/log_8h.html)
-  for possible values.
-* Setting AVCUT_CHECK_SCRIPT to an arbitrary value causes avcut to create a
-  shell script in the current working directory that will call
-  [mpv](https://mpv.io/) to play the video from 10 seconds before to 10 seconds
-  after each cutting point.
+The option -c causes avcut to create a shell script in the current working directory
+that will call [mpv](https://mpv.io/) to play the video from 10 seconds before to
+10 seconds after each cutting point.
