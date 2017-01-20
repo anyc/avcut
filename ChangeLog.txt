@@ -1,0 +1,9 @@
+v0.3
+====
+
+ * encoding flags can be loaded from file
+ * fixed a bug that occurs if the end of a video is included
+ * support for FFmpeg 3
+ * improved parsing of commandline arguments
+
+Thanks to baskerville and monarc99
