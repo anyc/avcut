@@ -809,7 +809,7 @@ void help() {
 	av_log(NULL, AV_LOG_INFO, "55.5s and 130s and all frames after 140s in input.avi and write the result to\n");
 	av_log(NULL, AV_LOG_INFO, "output.mkv, the following command can be used:\n");
 	av_log(NULL, AV_LOG_INFO, "\n");
-	av_log(NULL, AV_LOG_INFO, "   avcut input.avi output.mkv 0 10 55.5 130 140 -\n");
+	av_log(NULL, AV_LOG_INFO, "   avcut -i input.avi -o output.mkv 0 10 55.5 130 140 -\n");
 }
 
 int main(int argc, char **argv) {

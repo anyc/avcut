@@ -75,7 +75,7 @@ For example, to drop the frames of the first 10 seconds, the frames between
 55.5s and 130s and all frames after 140s in input.avi and write the result to
 output.mkv, the following command can be used:
 
-`avcut input.avi output.mkv 0 10 55.5 130 140 -`
+`avcut -i input.avi -o output.mkv 0 10 55.5 130 140 -`
 
 The option -c causes avcut to create a shell script in the current working directory
 that will call [mpv](https://mpv.io/) to play the video from 10 seconds before to
