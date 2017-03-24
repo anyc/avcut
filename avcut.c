@@ -1173,6 +1173,10 @@ int main(int argc, char **argv) {
 		long newo;
 		for (j = 0; j < pr->n_stream_ids; j++) {
 			i = pr->stream_ids[j];
+			
+			if (pr->out_fctx->streams[j]->codec->time_base.den == 0)
+				continue;
+			
 			// use -gop_size as start for DTS
 			newo = pr->in_fctx->streams[i]->codec->gop_size;
 			newo = 0 - pr->out_fctx->streams[j]->codec->ticks_per_frame * 
