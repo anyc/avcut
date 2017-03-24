@@ -80,6 +80,8 @@ struct project {
 	char stop_reading; // signal to stop reading new packets
 	char last_flush;
 	
+	unsigned long size_diff; // accept packet size differences with this value
+	
 	size_t video_packets_read;
 	size_t other_packets_read;
 	size_t video_packets_decoded;
@@ -267,7 +269,7 @@ double get_n_dropped_pkgs_at_ts(struct project *pr, struct packet_buffer *s, dou
 	return result;
 }
 
-char find_packet_for_frame(struct packet_buffer *s, size_t frame_idx, size_t *packet_idx) {
+char find_packet_for_frame(struct project *pr, struct packet_buffer *s, size_t frame_idx, size_t *packet_idx) {
 	size_t i;
 	
 	for (i=0;i<s->n_pkts;i++) {
@@ -278,17 +280,18 @@ char find_packet_for_frame(struct packet_buffer *s, size_t frame_idx, size_t *pa
 			(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts != AV_NOPTS_VALUE &&
 				s->pkts[i].dts == s->frames[frame_idx]->coded_picture_number) ||
 			(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == AV_NOPTS_VALUE &&
-				s->frames[frame_idx]->pkt_size == s->pkts[i].size)
+				s->frames[frame_idx]->pkt_size == s->pkts[i].size - pr->size_diff)
 		)
 		{
 			#ifndef USING_LIBAV
 			// libav is missing pkt_size
-			if (s->frames[frame_idx]->pkt_size != s->pkts[i].size) {
+			if (s->frames[frame_idx]->pkt_size != s->pkts[i].size - pr->size_diff) {
 				av_log(NULL, AV_LOG_ERROR,
-					  "size mismatch %zu:%d %zu:%d\n",
+						"size mismatch %zu:%d %zu:%d (diff: %lu, try: )\n",
 						frame_idx, s->frames[frame_idx]->pkt_size, i,
-						s->pkts[i].size);
-				exit(1);
+						s->pkts[i].size, pr->size_diff,
+						s->pkts[i].size - s->frames[frame_idx]->pkt_size);
+				break;
 			}
 			#endif
 			
@@ -420,7 +423,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					break;
 			}
 			
-			if (!find_packet_for_frame(s, i, &pkt_idx))
+			if (!find_packet_for_frame(pr, s, i, &pkt_idx))
 				exit(1);
 			if (pkt_idx > last_pkt)
 				last_pkt = pkt_idx;
@@ -521,16 +524,16 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts != AV_NOPTS_VALUE &&
 						s->pkts[i].dts == s->frames[j]->coded_picture_number) ||
 					(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == AV_NOPTS_VALUE &&
-						s->frames[j]->pkt_size == s->pkts[i].size)
+						s->frames[j]->pkt_size == s->pkts[i].size - pr->size_diff)
 					)
 				{
 					#ifndef USING_LIBAV
 					// libav is missing pkt_size
-					if (s->frames[j]->pkt_size != s->pkts[i].size) {
+					if (s->frames[j]->pkt_size != s->pkts[i].size - pr->size_diff) {
 						av_log(NULL, AV_LOG_ERROR,
-							"size mismatch %zu:%d %zu:%d (dts %" PRId64 ")\n",
-							j, s->frames[j]->pkt_size, i, s->pkts[i].size, s->pkts[i].dts);
-						exit(1);
+							"size mismatch %zu:%d %zu:%d (diff %lu, dts %" PRId64 ")\n",
+							j, s->frames[j]->pkt_size, i, s->pkts[i].size,  - pr->size_diff, s->pkts[i].dts);
+						break;
 					}
 					#endif
 					
@@ -792,6 +795,7 @@ void help() {
 	av_log(NULL, AV_LOG_INFO, "Options:\n");
 	av_log(NULL, AV_LOG_INFO, "\n");
 	av_log(NULL, AV_LOG_INFO, "  -c            Create a shell script to check the cutpoints with mpv\n");
+	av_log(NULL, AV_LOG_INFO, "  -d <diff>     Accept this difference in packet sizes during packet matching\n");
 	av_log(NULL, AV_LOG_INFO, "  -i <file>     Input file\n");
 	av_log(NULL, AV_LOG_INFO, "  -o <file>     Output file\n");
 	av_log(NULL, AV_LOG_INFO, "  -p <profile>  Use this encoding profile. If <profile> ends with \".profile\",\n");
@@ -814,6 +818,7 @@ void help() {
 
 int main(int argc, char **argv) {
 	unsigned int i, j;
+	unsigned long size_diff;
 	int ret, opt, create_check_script;
 	char *inputf, *outputf, *profile, *verbosity_level;
 	struct project project;
@@ -824,7 +829,8 @@ int main(int argc, char **argv) {
 	inputf = 0;
 	outputf = 0;
 	profile = 0;
-	while ((opt = getopt (argc, argv, "hi:o:p:v:c")) != -1) {
+	size_diff = 0;
+	while ((opt = getopt (argc, argv, "hi:o:p:v:cd:")) != -1) {
 		switch (opt) {
 			case 'h':
 				help();
@@ -843,6 +849,16 @@ int main(int argc, char **argv) {
 				break;
 			case 'c':
 				create_check_script = 1;
+				break;
+			case 'd':
+				{
+					char *end;
+					
+					size_diff = strtol(optarg, &end, 10);
+					if (end == optarg || *end != 0) {
+						av_log(NULL, AV_LOG_ERROR, "error while parsing size_diff: %s\n", optarg);
+					}
+				}
 				break;
 			default:
 				help();
@@ -869,6 +885,7 @@ int main(int argc, char **argv) {
 	pr->cuts = (double*) malloc(sizeof(double)*pr->n_cuts);
 	pr->stop_after_ts = DBL_MAX;
 	pr->last_flush = 0;
+	pr->size_diff = size_diff;
 	
 	for (i=optind; i < argc; i++) {
 		char *end;

@@ -57,6 +57,7 @@ Usage: avcut [options] [<drop_from_ts> <continue_with_ts> ...]
 Options:
 
   -c            Create a shell script to check cutpoints with mpv
+  -d <diff>     Accept this difference in packet sizes during packet matching
   -i <file>     Input file
   -o <file>     Output file
   -p <profile>  Use this encoding profile. If <profile> ends with ".profile",
