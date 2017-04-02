@@ -18,7 +18,7 @@ LDLIBS+=$(shell for x in libavcodec libavformat libavutil; do $(PKG_CONFIG) --li
 ### enable support for libav (EXPERIMENTAL)
 # CFLAGS+=-DUSING_LIBAV
 
-AVCUT_PROFILE_DIRECTORY?=/usr/share/avcut/profiles/
+AVCUT_PROFILE_DIRECTORY?=$(PREFIX)/share/avcut/profiles/
 
 ### set profile directory
 CFLAGS+=-DAVCUT_PROFILE_DIRECTORY=\"$(AVCUT_PROFILE_DIRECTORY)\"
@@ -42,9 +42,10 @@ install: $(APP)
 	install -m 755 avcut "$(DESTDIR)$(PREFIX)/bin/"
 	install -m 644 README.md "$(DESTDIR)$(PREFIX)/share/doc/$(APP)/"
 	
-	mkdir -p $(AVCUT_PROFILE_DIRECTORY)
-	cp profiles/* $(AVCUT_PROFILE_DIRECTORY)
-	chmod -R 644 $(AVCUT_PROFILE_DIRECTORY)
+	mkdir -p $(DESTDIR)$(AVCUT_PROFILE_DIRECTORY)
+	cp profiles/* $(DESTDIR)$(AVCUT_PROFILE_DIRECTORY)
+	chmod -R 644 $(DESTDIR)$(AVCUT_PROFILE_DIRECTORY)
+	chmod 755 $(DESTDIR)$(AVCUT_PROFILE_DIRECTORY)
 
 package: $(APP)
 	$(TAR) -czf "avcut-$(AVCUT_VERSION)-$(ARCH).tar.gz" avcut README.md LICENSE
