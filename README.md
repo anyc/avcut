@@ -64,6 +64,7 @@ Options:
                 <profile> is used as a path to the profile file. If not, the profile
                 is loaded from the default profile directory:
                    /usr/share/avcut/profiles/
+  -s <index>    Skip stream with this index
   -v <level>    Set verbosity level (see https://www.ffmpeg.org/doxygen/2.8/log_8h.html)
 ```
 

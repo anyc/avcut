@@ -160,7 +160,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 				enc_pkt.flags & AV_PKT_FLAG_KEY);
 		
 		av_log(NULL, AV_LOG_DEBUG,
-			"write v enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n",
+			"write video, enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n",
 			enc_pkt.size, enc_pkt.pts, enc_pkt.dts,
 			enc_pkt.pts*ostream->time_base.num/(double)ostream->time_base.den);
 		
@@ -356,8 +356,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->next_dts += dur;
 				
 				av_log(NULL, AV_LOG_DEBUG,
-					"write a cpy pts: %" PRId64 " dts: %" PRId64 " - %f to %f\n",
-					s->pkts[i].pts, s->pkts[i].dts, ts,
+					"write stream %d copy, pts: %" PRId64 " dts: %" PRId64 " - %f to %f\n",
+					s->stream_index, s->pkts[i].pts, s->pkts[i].dts, ts,
 					s->pkts[i].pts * av_q2d(pr->out_fctx->streams[s->stream_index]->time_base));
 				
 				pr->other_packets_written++;
@@ -802,6 +802,7 @@ void help() {
 	av_log(NULL, AV_LOG_INFO, "                <profile> is used as a path to the profile file. If not, the profile\n");
 	av_log(NULL, AV_LOG_INFO, "                is loaded from the default profile directory:\n");
 	av_log(NULL, AV_LOG_INFO, "                   %s\n", AVCUT_PROFILE_DIRECTORY);
+	av_log(NULL, AV_LOG_INFO, "  -s <index>    Skip stream with this index\n");
 	av_log(NULL, AV_LOG_INFO, "  -v <level>    Set verbosity level (see https://www.ffmpeg.org/doxygen/2.8/log_8h.html)\n");
 	av_log(NULL, AV_LOG_INFO, "\n");
 	av_log(NULL, AV_LOG_INFO, "Besides the input and output file, avcut expects a \"blacklist\", i.e. what should\n");
@@ -817,20 +818,23 @@ void help() {
 }
 
 int main(int argc, char **argv) {
-	unsigned int i, j;
+	unsigned int i, j, n_skip_streams;
+	unsigned int *skip_streams;
 	unsigned long size_diff;
 	int ret, opt, create_check_script;
 	char *inputf, *outputf, *profile, *verbosity_level;
 	struct project project;
 	struct project *pr;
 	
+	n_skip_streams = 0;
+	skip_streams = 0;
 	create_check_script = 0;
 	verbosity_level = 0;
 	inputf = 0;
 	outputf = 0;
 	profile = 0;
 	size_diff = 0;
-	while ((opt = getopt (argc, argv, "hi:o:p:v:cd:")) != -1) {
+	while ((opt = getopt (argc, argv, "hi:o:p:v:cd:s:")) != -1) {
 		switch (opt) {
 			case 'h':
 				help();
@@ -857,7 +861,26 @@ int main(int argc, char **argv) {
 					size_diff = strtol(optarg, &end, 10);
 					if (end == optarg || *end != 0) {
 						av_log(NULL, AV_LOG_ERROR, "error while parsing size_diff: %s\n", optarg);
+						help();
+						return 1;
 					}
+				}
+				break;
+			case 's':
+				{
+					char *end;
+					unsigned int skip;
+					
+					skip = strtol(optarg, &end, 10);
+					if (end == optarg || *end != 0) {
+						av_log(NULL, AV_LOG_ERROR, "error while parsing skip_stream: %s\n", optarg);
+						help();
+						return 1;
+					}
+					
+					n_skip_streams++;
+					skip_streams = (unsigned int*) realloc(skip_streams, sizeof(unsigned int)*n_skip_streams);
+					skip_streams[n_skip_streams-1] = skip;
 				}
 				break;
 			default:
@@ -935,6 +958,17 @@ int main(int argc, char **argv) {
 	
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
 		AVCodecContext *codec_ctx;
+		char skip;
+		
+		skip = 0;
+		for (j = 0; j < n_skip_streams; j++) {
+			if (i == skip_streams[j]) {
+				skip = 1;
+				break;
+			}
+		}
+		if (skip)
+			continue;
 		
 		codec_ctx = pr->in_fctx->streams[i]->codec;
 		
