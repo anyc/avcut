@@ -13,6 +13,7 @@ else
 endif
 
 CFLAGS+=-Wall -DAVCUT_VERSION=\"$(AVCUT_VERSION)\"
+CFLAGS+=$(shell for x in libavcodec libavformat libavutil; do $(PKG_CONFIG) --cflags $(PC_FLAGS) "$$x"; done)
 LDLIBS+=$(shell for x in libavcodec libavformat libavutil; do $(PKG_CONFIG) --libs $(PC_FLAGS) "$$x"; done)
 
 ### enable support for libav (EXPERIMENTAL)
