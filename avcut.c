@@ -36,6 +36,15 @@
 #define av_frame_free avcodec_free_frame
 #endif
 
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(56,56,0)
+#ifndef AV_CODEC_FLAG_GLOBAL_HEADER
+#define AV_CODEC_FLAG_GLOBAL_HEADER CODEC_FLAG_GLOBAL_HEADER
+#endif
+#ifndef AV_CODEC_CAP_DELAY
+#define AV_CODEC_CAP_DELAY CODEC_CAP_DELAY
+#endif
+#endif
+
 // buffer management struct for a stream
 struct packet_buffer {
 	unsigned int stream_index;
@@ -154,7 +163,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		s->next_dts += enc_pkt.duration;
 		
 		// copy the header to the beginning of each key frame if we use a global header
-		if (ostream->codec->flags & CODEC_FLAG_GLOBAL_HEADER)
+		if (ostream->codec->flags & AV_CODEC_FLAG_GLOBAL_HEADER)
 			av_bitstream_filter_filter(pr->bsf_dump_extra, ostream->codec, NULL,
 				&enc_pkt.data, &enc_pkt.size, enc_pkt.data, enc_pkt.size,
 				enc_pkt.flags & AV_PKT_FLAG_KEY);
@@ -479,7 +488,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		}
 		
 		// if the encoder emits packets delayed in time, flush the encoder to receive all remaining packets in the queue
-		if (frame_written && pr->out_fctx->streams[s->stream_index]->codec->codec->capabilities & CODEC_CAP_DELAY) {
+		if (frame_written && pr->out_fctx->streams[s->stream_index]->codec->codec->capabilities & AV_CODEC_CAP_DELAY) {
 			av_log(NULL, AV_LOG_DEBUG, "Local flushing stream #%u\n", s->stream_index);
 			while (1) {
 				int got_frame;
@@ -1146,7 +1155,7 @@ int main(int argc, char **argv) {
 			out_stream->sample_aspect_ratio = pr->in_fctx->streams[i]->sample_aspect_ratio;
 			
 			if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
-				enc_cctx->flags |= CODEC_FLAG_GLOBAL_HEADER;
+				enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 			
 			ret = avcodec_open2(enc_cctx, encoder, NULL);
 			if (ret < 0) {
@@ -1166,7 +1175,7 @@ int main(int argc, char **argv) {
 			enc_cctx->codec_tag = 0;
 			
 			if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
-				enc_cctx->flags |= CODEC_FLAG_GLOBAL_HEADER;
+				enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 		}
 	}
 	
@@ -1297,7 +1306,7 @@ int main(int argc, char **argv) {
 	
 	// if no more packet can be read, there might be still data in the queues, hence flush them if necessary
 	for (j = 0; j < pr->n_stream_ids; j++) {
-		if (!pr->out_fctx->streams[j]->codec->codec || !(pr->out_fctx->streams[j]->codec->codec->capabilities & CODEC_CAP_DELAY))
+		if (!pr->out_fctx->streams[j]->codec->codec || !(pr->out_fctx->streams[j]->codec->codec->capabilities & AV_CODEC_CAP_DELAY))
 			continue;
 		
 		while (1) {
