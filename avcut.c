@@ -805,6 +805,7 @@ void help() {
 	av_log(NULL, AV_LOG_INFO, "\n");
 	av_log(NULL, AV_LOG_INFO, "  -c              Create a shell script to check the cutpoints with mpv\n");
 	av_log(NULL, AV_LOG_INFO, "  -d <diff>       Accept this difference in packet sizes during packet matching\n");
+	av_log(NULL, AV_LOG_INFO, "  -f <framecount> provide the approximate total frame count to show progress information\n");
 	av_log(NULL, AV_LOG_INFO, "  -i <file>       Input file\n");
 	av_log(NULL, AV_LOG_INFO, "  -o <file>       Output file\n");
 	av_log(NULL, AV_LOG_INFO, "  -p <profile>    Use this encoding profile. If <profile> ends with \".profile\",\n");
@@ -813,7 +814,6 @@ void help() {
 	av_log(NULL, AV_LOG_INFO, "                    %s\n", AVCUT_PROFILE_DIRECTORY);
 	av_log(NULL, AV_LOG_INFO, "  -s <index>      Skip stream with this index\n");
 	av_log(NULL, AV_LOG_INFO, "  -v <level>      Set verbosity level (see https://www.ffmpeg.org/doxygen/2.8/log_8h.html)\n");
-	av_log(NULL, AV_LOG_INFO, "  -f <framecount> provide the approximate total frame count to show progress information\n");
 	av_log(NULL, AV_LOG_INFO, "\n");
 	av_log(NULL, AV_LOG_INFO, "Besides the input and output file, avcut expects a \"blacklist\", i.e. what should\n");
 	av_log(NULL, AV_LOG_INFO, "be dropped, as argument. This blacklist consists of timestamps that denote from\n");
@@ -828,7 +828,7 @@ void help() {
 }
 
 int main(int argc, char **argv) {
-	unsigned int i, j, n_skip_streams,max_framecount;
+	unsigned int i, j, n_skip_streams, max_framecount;
 	unsigned int *skip_streams;
 	unsigned long size_diff;
 	int ret, opt, create_check_script;
@@ -872,6 +872,11 @@ int main(int argc, char **argv) {
 					max_framecount = strtol(optarg, &end, 10);
 					if (end == optarg || *end != 0) {
 						av_log(NULL, AV_LOG_ERROR, "error while parsing size_diff: %s\n", optarg);
+						help();
+						return 1;
+					}
+					if (max_framecount == 0) {
+						av_log(NULL, AV_LOG_ERROR, "framecount must be greater than zero\n");
 						help();
 						return 1;
 					}
@@ -1265,8 +1270,9 @@ int main(int argc, char **argv) {
 		sbuffer[j].next_dts = dts_offset;
 		av_log(NULL, AV_LOG_DEBUG, "initial DTS %u: %.0f\n", j, sbuffer[j].next_dts);
 	}
-	int current_percent = -1;
+	
 	// start processing the input
+	int current_percent = -1;
 	pr->stop_reading = 0;
 	while (!pr->stop_reading) {
 		unsigned int stream_index;
@@ -1282,9 +1288,15 @@ int main(int argc, char **argv) {
 			pr->video_packets_read++;
 			if (max_framecount > 0) {
 				int percent = ((pr->video_packets_read) * 100) / max_framecount;
+				
 				if (percent > current_percent) {
-					fprintf( stdout, "processed %03d\r\n", percent);
-					fflush( stdout );
+					if (current_percent >= 0) {
+						// move cursor up one line, erase line, return cursor to first column
+						printf("\033[A\33[2K\r");
+					}
+					
+					fprintf(stdout, "processed %03d percent of all frames\n", percent);
+					fflush(stdout);
 					current_percent = percent;
 				}
 			}

@@ -58,6 +58,7 @@ Options:
 
   -c              Create a shell script to check cutpoints with mpv
   -d <diff>       Accept this difference in packet sizes during packet matching
+  -f <framecount> provide the approximate total frame count to show progress information
   -i <file>       Input file
   -o <file>       Output file
   -p <profile>    Use this encoding profile. If <profile> ends with ".profile",
@@ -66,7 +67,6 @@ Options:
                      /usr/share/avcut/profiles/
   -s <index>      Skip stream with this index
   -v <level>      Set verbosity level (see https://www.ffmpeg.org/doxygen/2.8/log_8h.html)
-  -f <framecount> provide the approximate total frame count to show progress information
 ```
 
 Besides the input and output file, avcut expects a "blacklist", i.e. what should
