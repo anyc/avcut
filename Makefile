@@ -2,7 +2,7 @@
 -include local.mk
 
 APP=avcut
-AVCUT_VERSION=0.3
+AVCUT_VERSION=0.4
 
 ifneq ($(CROSS_COMPILE),)
 	CC=$(CROSS_COMPILE)gcc
