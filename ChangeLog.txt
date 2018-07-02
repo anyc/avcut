@@ -1,3 +1,10 @@
+v0.4
+====
+ * progress information (Christoph Läubrich)
+ * added dockerfile (Christoph Läubrich)
+ * various build related fixes (gCurse, billie80)
+ * and other small improvements
+
 v0.3
 ====
 
@@ -6,4 +13,4 @@ v0.3
  * support for FFmpeg 3
  * improved parsing of commandline arguments
 
-Thanks to baskerville and monarc99
+ Thanks to baskerville and monarc99
