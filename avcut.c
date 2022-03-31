@@ -300,7 +300,7 @@ char find_packet_for_frame(struct project *pr, struct packet_buffer *s, size_t f
 						frame_idx, s->frames[frame_idx]->pkt_size, i,
 						s->pkts[i].size, pr->size_diff,
 						s->pkts[i].size - s->frames[frame_idx]->pkt_size);
-				break;
+				continue;
 			}
 			#endif
 			
@@ -544,7 +544,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 						av_log(NULL, AV_LOG_ERROR,
 							"size mismatch %zu:%d %zu:%d (diff %lu, dts %" PRId64 ")\n",
 							j, s->frames[j]->pkt_size, i, s->pkts[i].size,  - pr->size_diff, s->pkts[i].dts);
-						break;
+						continue;
 					}
 					#endif
 					
@@ -581,7 +581,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					pr->in_fctx->streams[s->stream_index]->codec->time_base,
 					pr->in_fctx->streams[s->stream_index]->time_base);
 			
-			ts = frame_pts2ts(pr, s, s->frames[i]);
+			ts = frame_pts2ts(pr, s, frame);
 			
 			if (pr->stop_after_ts < ts)
 				s->stop_reading_stream = 1;
