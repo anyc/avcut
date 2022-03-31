@@ -82,6 +82,9 @@ struct project {
 	unsigned int n_stream_ids; // number of streams in output file
 	unsigned int *stream_ids; // mapping of output stream to input stream
 	
+	AVCodecContext **in_codec_ctx;
+	AVCodecContext **out_codec_ctx;
+	
 	double *cuts; // [ first_excluded_frame, first_included_frame, ...]
 	size_t n_cuts;
 	
@@ -134,17 +137,18 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 	AVPacket enc_pkt = { .data = NULL, .size = 0 };
 	int got_frame, ret;
 	AVStream *ostream = pr->out_fctx->streams[s->stream_index];
+	AVCodecContext *codec_ctx = pr->out_codec_ctx[s->stream_index];
 	
 	
 	if (frame)
 		av_log(NULL, AV_LOG_DEBUG, "enc frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
 			frame->pts, frame->best_effort_timestamp, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
-			frame->pts * av_q2d(ostream->codec->time_base)
+			frame->pts * av_q2d(codec_ctx->time_base)
 			);
 	
 	av_init_packet(&enc_pkt);
 	
-	ret = avcodec_encode_video2(ostream->codec, &enc_pkt, frame, &got_frame);
+	ret = avcodec_encode_video2(codec_ctx, &enc_pkt, frame, &got_frame);
 	if (ret < 0) {
 		av_log(NULL, AV_LOG_ERROR, "error while encoding frame, error %d\n", ret);
 		return ret;
@@ -155,16 +159,16 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		
 		enc_pkt.stream_index = s->stream_index;
 		if (enc_pkt.duration == 0)
-			enc_pkt.duration = ostream->codec->ticks_per_frame;
+			enc_pkt.duration = codec_ctx->ticks_per_frame;
 		
-		av_packet_rescale_ts(&enc_pkt, ostream->codec->time_base, ostream->time_base);
+		av_packet_rescale_ts(&enc_pkt, codec_ctx->time_base, ostream->time_base);
 		
 		enc_pkt.dts = s->next_dts;
 		s->next_dts += enc_pkt.duration;
 		
 		// copy the header to the beginning of each key frame if we use a global header
-		if (ostream->codec->flags & AV_CODEC_FLAG_GLOBAL_HEADER)
-			av_bitstream_filter_filter(pr->bsf_dump_extra, ostream->codec, NULL,
+		if (codec_ctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER)
+			av_bitstream_filter_filter(pr->bsf_dump_extra, codec_ctx, NULL,
 				&enc_pkt.data, &enc_pkt.size, enc_pkt.data, enc_pkt.size,
 				enc_pkt.flags & AV_PKT_FLAG_KEY);
 		
@@ -192,7 +196,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 
 // calculate stream timestamp of frame using its PTS
 double frame_pts2ts(struct project *pr, struct packet_buffer *s, AVFrame *frame) {
-	return frame->pts * av_q2d(pr->in_fctx->streams[s->stream_index]->codec->time_base);
+	return frame->pts * av_q2d(pr->in_codec_ctx[s->stream_index]->time_base);
 }
 
 // check if pkt/frame at timestamp $ts shall be included
@@ -338,7 +342,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 	if (!s->pkts || s->n_pkts == 0)
 		return;
 	
-	if (pr->in_fctx->streams[s->stream_index]->codec->codec_type != AVMEDIA_TYPE_VIDEO) {
+	if (pr->in_fctx->streams[s->stream_index]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) {
 		// check if we can copy/drop the complete buffer or if we have to check each packet individually
 		buffer_mode = get_buffer_processing_mode(pr, s, 0);
 		
@@ -464,7 +468,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			// calculate new PTS
 			s->frames[i]->pts -= av_rescale_q(s->duration_dropped_pkts,
 						pr->in_fctx->streams[s->stream_index]->time_base,
-						pr->in_fctx->streams[s->stream_index]->codec->time_base);
+						pr->in_codec_ctx[s->stream_index]->time_base);
 			
 			if (pr->stop_after_ts < ts)
 				s->stop_reading_stream = 1;
@@ -490,7 +494,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		}
 		
 		// if the encoder emits packets delayed in time, flush the encoder to receive all remaining packets in the queue
-		if (frame_written && pr->out_fctx->streams[s->stream_index]->codec->codec->capabilities & AV_CODEC_CAP_DELAY) {
+		if (frame_written && pr->out_codec_ctx[s->stream_index]->codec->capabilities & AV_CODEC_CAP_DELAY) {
 			av_log(NULL, AV_LOG_DEBUG, "Local flushing stream #%u\n", s->stream_index);
 			while (1) {
 				int got_frame;
@@ -516,7 +520,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		if (frame_written) {
 			// Some encoders do not like new frames after we flushed them.
 			// Hence, we restart the encoder.
-			AVCodecContext *out_cctx = pr->out_fctx->streams[s->stream_index]->codec;
+			AVCodecContext *out_cctx = pr->out_codec_ctx[s->stream_index];
 			
 			out_cctx->codec->close(out_cctx);
 			out_cctx->codec->init(out_cctx);
@@ -578,7 +582,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			}
 			
 			s->pkts[i].pts = av_rescale_q(frame->pts,
-					pr->in_fctx->streams[s->stream_index]->codec->time_base,
+					pr->in_codec_ctx[s->stream_index]->time_base,
 					pr->in_fctx->streams[s->stream_index]->time_base);
 			
 			ts = frame_pts2ts(pr, s, frame);
@@ -600,11 +604,11 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->next_dts += dur;
 				
 				// if the original h264 stream is in AVCC format, convert it to Annex B
-				if (pr->in_fctx->streams[s->stream_index]->codec->opaque &&
-					((struct codeccontext*) pr->in_fctx->streams[s->stream_index]->codec->opaque)->h264_avcc_format)
+				if (pr->in_codec_ctx[s->stream_index]->opaque &&
+					((struct codeccontext*) pr->in_codec_ctx[s->stream_index]->opaque)->h264_avcc_format)
 				{
 					av_bitstream_filter_filter(pr->bsf_h264_to_annexb,
-						pr->in_fctx->streams[s->stream_index]->codec, NULL,
+						pr->in_codec_ctx[s->stream_index], NULL,
 						&s->pkts[i].data, &s->pkts[i].size, s->pkts[i].data, s->pkts[i].size,
 						s->pkts[i].flags & AV_PKT_FLAG_KEY);
 				}
@@ -668,7 +672,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 	if (!packet)
 		packet = &nullpacket;
 	
-	mtype = pr->in_fctx->streams[stream_index]->codec->codec_type;
+	mtype = pr->in_fctx->streams[stream_index]->codecpar->codec_type;
 	
 	got_frame = 0;
 	if (mtype == AVMEDIA_TYPE_VIDEO) {
@@ -677,7 +681,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			return AVERROR(ENOMEM);
 		}
 		
-		ret = avcodec_decode_video2(pr->in_fctx->streams[stream_index]->codec, frame, &got_frame, packet);
+		ret = avcodec_decode_video2(pr->in_codec_ctx[stream_index], frame, &got_frame, packet);
 		
 		if (ret < 0) {
 			av_frame_free(&frame);
@@ -709,7 +713,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			if (frame->pts == frame->pkt_dts)
 				frame->pts = av_rescale_q(frame->pts,
 							pr->in_fctx->streams[stream_index]->time_base,
-							pr->in_fctx->streams[stream_index]->codec->time_base);
+							pr->in_codec_ctx[stream_index]->time_base);
 			
 			// The last frames in some AVIs have a DTS of zero. Here, we
 			// override the PTS (copied from DTS) in such a case to provide
@@ -717,7 +721,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			if (frame->pts < sbuffer->last_pts) {
 				int64_t new_pts = sbuffer->last_pts + av_rescale_q(frame->pkt_duration,
 					pr->in_fctx->streams[stream_index]->time_base,
-					pr->in_fctx->streams[stream_index]->codec->time_base);
+					pr->in_codec_ctx[stream_index]->time_base);
 				av_log(NULL, AV_LOG_DEBUG, "adjusting frame PTS from %" PRId64 " to %" PRId64 "\n", frame->pts, new_pts);
 				frame->pts = new_pts;
 			}
@@ -994,6 +998,8 @@ int main(int argc, char **argv) {
 	
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
 		AVCodecContext *codec_ctx;
+		AVCodecParameters *par;
+		AVCodec *codec;
 		char skip;
 		
 		skip = 0;
@@ -1006,7 +1012,20 @@ int main(int argc, char **argv) {
 		if (skip)
 			continue;
 		
-		codec_ctx = pr->in_fctx->streams[i]->codec;
+		par = pr->in_fctx->streams[i]->codecpar;
+		codec = avcodec_find_decoder(par->codec_id);
+		codec_ctx = avcodec_alloc_context3(codec);
+		if (!codec_ctx) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to alloc video decoder context\n");
+			continue;
+		}
+		
+		ret = avcodec_parameters_to_context(codec_ctx, par);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
+			avcodec_free_context(&codec_ctx);
+			continue;
+		}
 		
 		// we buffer multiple frames, this avoids that avcodec_decode_video2 overwrites our data
 		codec_ctx->refcounted_frames = 1;
@@ -1015,6 +1034,7 @@ int main(int argc, char **argv) {
 			ret = avcodec_open2(codec_ctx, avcodec_find_decoder(codec_ctx->codec_id), NULL);
 			if (ret < 0) {
 				av_log(NULL, AV_LOG_ERROR, "Failed to open decoder for stream %u, error %d\n", i, ret);
+				avcodec_free_context(&codec_ctx);
 				return ret;
 			}
 			
@@ -1029,6 +1049,7 @@ int main(int argc, char **argv) {
 				cctx = av_malloc(sizeof(struct codeccontext));
 				if (!cctx) {
 					av_log(NULL, AV_LOG_ERROR, "malloc codeccontext failed\n");
+					avcodec_free_context(&codec_ctx);
 					return AVERROR_UNKNOWN;
 				}
 				codec_ctx->opaque = cctx;
@@ -1057,6 +1078,8 @@ int main(int argc, char **argv) {
 				break;
 			default: break;
 		}
+		
+		avcodec_free_context(&codec_ctx);
 	}
 	
 	av_dump_format(pr->in_fctx, 0, inputf, 0);
@@ -1093,15 +1116,36 @@ int main(int argc, char **argv) {
 	}
 	#endif
 	
+	pr->in_codec_ctx = (AVCodecContext**) calloc(1, sizeof(AVCodecContext*) * pr->in_fctx->nb_streams);
+	pr->out_codec_ctx = (AVCodecContext**) calloc(1, sizeof(AVCodecContext*) * pr->n_stream_ids);
+	
 	// copy most properties from the input streams to the output streams
 	for (j = 0; j < pr->n_stream_ids; j++) {
 		AVStream *out_stream;
 		AVCodecContext *dec_cctx, *enc_cctx;
+		AVCodecParameters *dec_par, *enc_par;
+		AVCodec *dec_codec, *enc_codec;
 		
 		i = pr->stream_ids[j];
 		
 // 		if (pr->in_fctx->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC)
 // 			continue;
+		
+		
+		dec_par = pr->in_fctx->streams[i]->codecpar;
+		dec_codec = avcodec_find_decoder(dec_par->codec_id);
+		dec_cctx = avcodec_alloc_context3(dec_codec);
+		if (!dec_cctx) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to alloc video decoder context\n");
+			return AVERROR_UNKNOWN;
+		}
+		ret = avcodec_parameters_to_context(dec_cctx, dec_par);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
+			return AVERROR_UNKNOWN;
+		}
+		pr->in_codec_ctx[i] = dec_cctx;
+		
 		
 		out_stream = avformat_new_stream(pr->out_fctx, NULL);
 		if (!out_stream) {
@@ -1109,13 +1153,30 @@ int main(int argc, char **argv) {
 			return AVERROR_UNKNOWN;
 		}
 		
-		dec_cctx = pr->in_fctx->streams[i]->codec;
-		enc_cctx = out_stream->codec;
-		
 		out_stream->time_base = pr->in_fctx->streams[i]->time_base;
 		
 		// copy stream metadata
 		av_dict_copy(&out_stream->metadata, pr->in_fctx->streams[i]->metadata, 0);
+		
+// 		enc_par = out_stream->codecpar;
+// 		enc_codec = avcodec_find_encoder(dec_par->codec_id);
+		enc_cctx = avcodec_alloc_context3(NULL);
+		if (!enc_cctx) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to alloc video decoder context\n");
+			return AVERROR_UNKNOWN;
+		}
+		ret = avcodec_parameters_copy(out_stream->codecpar, pr->in_fctx->streams[i]->codecpar);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
+			return AVERROR_UNKNOWN;
+		}
+		
+		ret = avcodec_parameters_to_context(enc_cctx, out_stream->codecpar);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
+			return AVERROR_UNKNOWN;
+		}
+		pr->out_codec_ctx[j] = enc_cctx;
 		
 		if (dec_cctx->codec_type == AVMEDIA_TYPE_VIDEO) {
 			AVCodec *encoder;
@@ -1123,6 +1184,8 @@ int main(int argc, char **argv) {
 			encoder = avcodec_find_encoder(dec_cctx->codec_id);
 			if (!encoder) {
 				av_log(NULL, AV_LOG_ERROR, "Encoder not found\n");
+				avcodec_free_context(&dec_cctx);
+				avcodec_free_context(&enc_cctx);
 				return AVERROR_INVALIDDATA;
 			}
 			
@@ -1130,6 +1193,8 @@ int main(int argc, char **argv) {
 				ret = avcodec_get_context_defaults3(enc_cctx, encoder);
 				if (ret < 0) {
 					av_log(NULL, AV_LOG_ERROR, "Setting codec defaults failed\n");
+					avcodec_free_context(&dec_cctx);
+					avcodec_free_context(&enc_cctx);
 					return ret;
 				}
 				
@@ -1160,6 +1225,8 @@ int main(int argc, char **argv) {
 				ret = avcodec_copy_context(enc_cctx, dec_cctx);
 				if (ret < 0) {
 					av_log(NULL, AV_LOG_ERROR, "Copying stream context failed\n");
+					avcodec_free_context(&dec_cctx);
+					avcodec_free_context(&enc_cctx);
 					return ret;
 				}
 				
@@ -1184,6 +1251,10 @@ int main(int argc, char **argv) {
 			if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
 				enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 			
+			// TODO is this a good approach?
+			if (enc_cctx->time_base.num <= 0 || enc_cctx->time_base.den <= 0)
+				enc_cctx->time_base = out_stream->time_base;
+			
 			ret = avcodec_open2(enc_cctx, encoder, NULL);
 			if (ret < 0) {
 				av_log(NULL, AV_LOG_ERROR, "Failed to open encoder for stream %u, error %d\n", i, ret);
@@ -1191,11 +1262,15 @@ int main(int argc, char **argv) {
 			}
 		} else if (dec_cctx->codec_type == AVMEDIA_TYPE_UNKNOWN) {
 			av_log(NULL, AV_LOG_ERROR, "Error: input stream #%d is of unknown type\n", i);
+			avcodec_free_context(&dec_cctx);
+			avcodec_free_context(&enc_cctx);
 			return AVERROR_INVALIDDATA;
 		} else {
-			ret = avcodec_copy_context(pr->out_fctx->streams[j]->codec, pr->in_fctx->streams[i]->codec);
+			ret = avcodec_copy_context(enc_cctx, dec_cctx);
 			if (ret < 0) {
 				av_log(NULL, AV_LOG_ERROR, "Copying codec context failed, error %d\n", ret);
+				avcodec_free_context(&dec_cctx);
+				avcodec_free_context(&enc_cctx);
 				return ret;
 			}
 			
@@ -1204,6 +1279,9 @@ int main(int argc, char **argv) {
 			if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
 				enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 		}
+		out_stream->codecpar->codec_tag = enc_cctx->codec_tag;
+		printf("dtype %d %d %x\n", dec_par->codec_type, dec_par->codec_id, dec_par->codec_tag);
+		printf("etype %d %d %x\n", out_stream->codecpar->codec_type, out_stream->codecpar->codec_id, out_stream->codecpar->codec_tag);
 	}
 	
 	// initialize bitstream filters
@@ -1240,12 +1318,12 @@ int main(int argc, char **argv) {
 		av_log(NULL, AV_LOG_DEBUG, "\n");
 		av_log(NULL, AV_LOG_DEBUG, "stream %d in:\n", i);
 		av_log(NULL, AV_LOG_DEBUG, "stream: " DUMP_TB(&pr->in_fctx->streams[i]->time_base));
-		av_log(NULL, AV_LOG_DEBUG, "codec:  " DUMP_TB(&pr->in_fctx->streams[i]->codec->time_base));
-		av_log(NULL, AV_LOG_DEBUG, "ticks_per_frame: %d\n", pr->in_fctx->streams[i]->codec->ticks_per_frame);
+		av_log(NULL, AV_LOG_DEBUG, "codec:  " DUMP_TB(&pr->in_codec_ctx[i]->time_base));
+		av_log(NULL, AV_LOG_DEBUG, "ticks_per_frame: %d\n", pr->in_codec_ctx[i]->ticks_per_frame);
 		av_log(NULL, AV_LOG_DEBUG, "stream %d out:\n", j);
 		av_log(NULL, AV_LOG_DEBUG, "stream: " DUMP_TB(&pr->out_fctx->streams[j]->time_base));
-		av_log(NULL, AV_LOG_DEBUG, "codec:  " DUMP_TB(&pr->out_fctx->streams[j]->codec->time_base));
-		av_log(NULL, AV_LOG_DEBUG, "ticks_per_frame: %d\n", pr->out_fctx->streams[j]->codec->ticks_per_frame);
+		av_log(NULL, AV_LOG_DEBUG, "codec:  " DUMP_TB(&pr->out_codec_ctx[j]->time_base));
+		av_log(NULL, AV_LOG_DEBUG, "ticks_per_frame: %d\n", pr->out_codec_ctx[j]->ticks_per_frame);
 	}
 	av_log(NULL, AV_LOG_DEBUG, "\n");
 	
@@ -1261,13 +1339,13 @@ int main(int argc, char **argv) {
 		for (j = 0; j < pr->n_stream_ids; j++) {
 			i = pr->stream_ids[j];
 			
-			if (pr->out_fctx->streams[j]->codec->time_base.den == 0)
+			if (pr->out_codec_ctx[j]->time_base.den == 0)
 				continue;
 			
 			// use -gop_size as start for DTS
-			newo = pr->in_fctx->streams[i]->codec->gop_size;
-			newo = 0 - pr->out_fctx->streams[j]->codec->ticks_per_frame * 
-				av_rescale_q(newo, pr->out_fctx->streams[j]->codec->time_base, pr->out_fctx->streams[j]->time_base);
+			newo = pr->in_codec_ctx[i]->gop_size;
+			newo = 0 - pr->out_codec_ctx[j]->ticks_per_frame * 
+				av_rescale_q(newo, pr->out_codec_ctx[j]->time_base, pr->out_codec_ctx[j]->time_base);
 			if (newo < dts_offset)
 				dts_offset = newo;
 		}
@@ -1292,7 +1370,7 @@ int main(int argc, char **argv) {
 			break;
 		}
 		
-		if (pr->in_fctx->streams[packet.stream_index]->codec->codec_type == AVMEDIA_TYPE_VIDEO) {
+		if (pr->in_fctx->streams[packet.stream_index]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
 			pr->video_packets_read++;
 			if (max_framecount > 0) {
 				int percent = ((pr->video_packets_read) * 100) / max_framecount;
@@ -1348,7 +1426,7 @@ int main(int argc, char **argv) {
 	
 	// if no more packet can be read, there might be still data in the queues, hence flush them if necessary
 	for (j = 0; j < pr->n_stream_ids; j++) {
-		if (!pr->out_fctx->streams[j]->codec->codec || !(pr->out_fctx->streams[j]->codec->codec->capabilities & AV_CODEC_CAP_DELAY))
+		if (!pr->out_codec_ctx[j]->codec || !(pr->out_codec_ctx[j]->codec->capabilities & AV_CODEC_CAP_DELAY))
 			continue;
 		
 		while (1) {
@@ -1380,15 +1458,15 @@ int main(int argc, char **argv) {
 		av_freep(&sbuffer[j].pkts);
 		av_freep(&sbuffer[j].frames);
 		
-		if (pr->out_fctx->streams[j]->codec && avcodec_is_open(pr->out_fctx->streams[j]->codec))
-			avcodec_close(pr->out_fctx->streams[j]->codec);
+		if (pr->out_codec_ctx[j] && avcodec_is_open(pr->out_codec_ctx[j]))
+			avcodec_close(pr->out_codec_ctx[j]);
 	}
 	
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
-		if (pr->in_fctx->streams[i]->codec) {
-			av_freep(&pr->in_fctx->streams[i]->codec->opaque);
-			if (avcodec_is_open(pr->in_fctx->streams[i]->codec))
-				avcodec_close(pr->in_fctx->streams[i]->codec);
+		if (pr->in_codec_ctx[i]) {
+			av_freep(&pr->in_codec_ctx[i]->opaque);
+			if (avcodec_is_open(pr->in_codec_ctx[i]))
+				avcodec_close(pr->in_codec_ctx[i]);
 		}
 	}
 	
@@ -1452,6 +1530,10 @@ int main(int argc, char **argv) {
 	
 	av_freep(&pr->cuts);
 	av_freep(&sbuffer);
+	
+	free(pr->stream_ids);
+	free(pr->in_codec_ctx);
+	free(pr->out_codec_ctx);
 	
 	return 0;
 }
