@@ -1282,9 +1282,18 @@ int main(int argc, char **argv) {
 				av_opt_set(enc_cctx->priv_data, "tune", pr->profile->tune, AV_OPT_SEARCH_CHILDREN);
 				av_opt_set(enc_cctx->priv_data, "x264opts", pr->profile->x264opts, AV_OPT_SEARCH_CHILDREN);
 			} else {
-				ret = avcodec_copy_context(enc_cctx, dec_cctx);
+				AVCodecParameters params;
+				
+				ret = avcodec_parameters_from_context(&params, dec_cctx);
 				if (ret < 0) {
-					av_log(NULL, AV_LOG_ERROR, "Copying stream context failed\n");
+					av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 1\n");
+					avcodec_free_context(&dec_cctx);
+					avcodec_free_context(&enc_cctx);
+					return ret;
+				}
+				ret = avcodec_parameters_to_context(enc_cctx, &params);
+				if (ret < 0) {
+					av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 2\n");
 					avcodec_free_context(&dec_cctx);
 					avcodec_free_context(&enc_cctx);
 					return ret;
@@ -1326,9 +1335,18 @@ int main(int argc, char **argv) {
 			avcodec_free_context(&enc_cctx);
 			return AVERROR_INVALIDDATA;
 		} else {
-			ret = avcodec_copy_context(enc_cctx, dec_cctx);
+			AVCodecParameters params;
+			
+			ret = avcodec_parameters_from_context(&params, dec_cctx);
 			if (ret < 0) {
-				av_log(NULL, AV_LOG_ERROR, "Copying codec context failed, error %d\n", ret);
+				av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 1\n");
+				avcodec_free_context(&dec_cctx);
+				avcodec_free_context(&enc_cctx);
+				return ret;
+			}
+			ret = avcodec_parameters_to_context(enc_cctx, &params);
+			if (ret < 0) {
+				av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 2\n");
 				avcodec_free_context(&dec_cctx);
 				avcodec_free_context(&enc_cctx);
 				return ret;
