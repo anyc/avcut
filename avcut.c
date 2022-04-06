@@ -201,6 +201,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		}
 		
 		av_frame_free(&frame);
+		// TODO av_frame_unref?
 		av_packet_unref(&enc_pkt);
 	}
 	
@@ -1101,9 +1102,6 @@ int main(int argc, char **argv) {
 		MYCMP(has_b_frames, "%d");
 		MYCMP(codec_id, "%d");
 		
-		// we buffer multiple frames, this avoids that avcodec_decode_video2 overwrites our data
-		codec_ctx->refcounted_frames = 1;
-		
 		if (codec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) { // || codec_ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
 			ret = avcodec_open2(codec_ctx, codec, NULL);
 			if (ret < 0) {
@@ -1503,6 +1501,9 @@ int main(int argc, char **argv) {
 				av_log(NULL, AV_LOG_ERROR, "error while reading next frame: %d\n", ret);
 			break;
 		}
+		
+		// we buffer multiple frames, this avoids that avcodec_decode_video2 overwrites our data
+		av_packet_make_refcounted(&packet);
 		
 		if (pr->in_fctx->streams[packet.stream_index]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
 			pr->video_packets_read++;
