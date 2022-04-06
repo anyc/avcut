@@ -110,8 +110,8 @@ struct project {
 	size_t video_packets_written;
 	size_t other_packets_written;
 	
-	AVBitStreamFilterContext *bsf_h264_to_annexb;
-	AVBitStreamFilterContext *bsf_dump_extra;
+	AVBSFContext *bsf_h264_to_annexb;
+	AVBSFContext *bsf_dump_extra;
 };
 
 // private data avcut may store with each AVCodecContext
@@ -176,10 +176,17 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		s->next_dts += enc_pkt.duration;
 		
 		// copy the header to the beginning of each key frame if we use a global header
-		if (codec_ctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER)
-			av_bitstream_filter_filter(pr->bsf_dump_extra, codec_ctx, NULL,
-				&enc_pkt.data, &enc_pkt.size, enc_pkt.data, enc_pkt.size,
-				enc_pkt.flags & AV_PKT_FLAG_KEY);
+		if (codec_ctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER) {
+			// TODO properly flush filter
+			ret = av_bsf_send_packet(pr->bsf_dump_extra, &enc_pkt);
+			if (ret) {
+				av_log(NULL, AV_LOG_ERROR, "error av_bsf_send_packet(): %d\n", ret);
+			}
+			ret = av_bsf_receive_packet(pr->bsf_dump_extra, &enc_pkt);
+			if (ret == EAGAIN)
+				av_log(NULL, AV_LOG_ERROR, "TODO flush av_bsf_send_packet(): %d\n", ret);
+			// break AVERROR_EOF
+		}
 		
 		av_log(NULL, AV_LOG_DEBUG,
 			"write video, enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n",
@@ -628,10 +635,15 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				if (pr->in_codec_ctx[s->stream_index]->opaque &&
 					((struct codeccontext*) pr->in_codec_ctx[s->stream_index]->opaque)->h264_avcc_format)
 				{
-					av_bitstream_filter_filter(pr->bsf_h264_to_annexb,
-						pr->in_codec_ctx[s->stream_index], NULL,
-						&s->pkts[i].data, &s->pkts[i].size, s->pkts[i].data, s->pkts[i].size,
-						s->pkts[i].flags & AV_PKT_FLAG_KEY);
+					// TODO properly flush filter
+					ret = av_bsf_send_packet(pr->bsf_h264_to_annexb, &s->pkts[i]);
+					if (ret) {
+						av_log(NULL, AV_LOG_ERROR, "error av_bsf_send_packet(): %d\n", ret);
+					}
+					ret = av_bsf_receive_packet(pr->bsf_h264_to_annexb, &s->pkts[i]);
+					if (ret == EAGAIN)
+						av_log(NULL, AV_LOG_ERROR, "TODO flush av_bsf_send_packet(): %d\n", ret);
+					// break AVERROR_EOF
 				}
 				
 				av_log(NULL, AV_LOG_DEBUG,
@@ -879,14 +891,19 @@ int main(int argc, char **argv) {
 	unsigned int *skip_streams;
 	unsigned long size_diff;
 	int ret, opt, create_check_script;
-	char *inputf, *outputf, *profile, *verbosity_level;
+	char *inputf, *outputf, *profile;
+#ifndef DEBUG
+	char *verbosity_level;
+#endif
 	struct project project;
 	struct project *pr;
 	
 	n_skip_streams = 0;
 	skip_streams = 0;
 	create_check_script = 0;
+#ifndef DEBUG
 	verbosity_level = 0;
+#endif
 	inputf = 0;
 	outputf = 0;
 	profile = 0;
@@ -907,7 +924,9 @@ int main(int argc, char **argv) {
 				profile = optarg;
 				break;
 			case 'v':
+				#ifndef DEBUG
 				verbosity_level = optarg;
+				#endif
 				break;
 			case 'c':
 				create_check_script = 1;
@@ -1325,9 +1344,55 @@ int main(int argc, char **argv) {
 		printf("etype %d %d %x\n", out_stream->codecpar->codec_type, out_stream->codecpar->codec_id, out_stream->codecpar->codec_tag);
 	}
 	
-	// initialize bitstream filters
-	pr->bsf_h264_to_annexb = av_bitstream_filter_init("h264_mp4toannexb");
-	pr->bsf_dump_extra = av_bitstream_filter_init("dump_extra");
+	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
+		if (pr->in_fctx->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO)
+			continue;
+		
+		// initialize bitstream filters
+		const AVBitStreamFilter *bsf, *bsf2;
+		bsf = av_bsf_get_by_name("h264_mp4toannexb");
+		if (!bsf) {
+			av_log(NULL, AV_LOG_ERROR, "av_bsf_get_by_name(h264_to_annexb) failed\n");
+			return AVERROR_UNKNOWN;
+		}
+		bsf2 = av_bsf_get_by_name("dump_extra");
+		if (!bsf2) {
+			av_log(NULL, AV_LOG_ERROR, "av_bsf_get_by_name(dump_extra) failed\n");
+			return AVERROR_UNKNOWN;
+		}
+		ret = av_bsf_alloc(bsf, &pr->bsf_h264_to_annexb);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "av_bsf_alloc(bsf_h264_to_annexb)\n");
+			return AVERROR_UNKNOWN;
+		}
+		ret = av_bsf_alloc(bsf2, &pr->bsf_dump_extra);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "av_bsf_alloc(bsf_dump_extra)\n");
+			return AVERROR_UNKNOWN;
+		}
+		
+		ret = avcodec_parameters_copy(pr->bsf_h264_to_annexb->par_in, pr->in_fctx->streams[i]->codecpar);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to bsf_h264_to_annexb\n");
+			return AVERROR_UNKNOWN;
+		}
+		ret = avcodec_parameters_copy(pr->bsf_dump_extra->par_in, pr->in_fctx->streams[i]->codecpar);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to bsf_dump_extra\n");
+			return AVERROR_UNKNOWN;
+		}
+		ret = av_bsf_init(pr->bsf_h264_to_annexb);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "av_bsf_alloc(bsf_h264_to_annexb)\n");
+			return AVERROR_UNKNOWN;
+		}
+		ret = av_bsf_init(pr->bsf_dump_extra);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "av_bsf_alloc(bsf_dump_extra)\n");
+			return AVERROR_UNKNOWN;
+		}
+	}
+	
 	if (!pr->bsf_dump_extra || !pr->bsf_h264_to_annexb) {
 		av_log(NULL, AV_LOG_ERROR, "error while initializing bitstream filters \"dump_extra\" and \"h264_mp4toannexb\"\n");
 		exit(1);
@@ -1502,8 +1567,8 @@ int main(int argc, char **argv) {
 	 * cleanup
 	 */
 	
-	av_bitstream_filter_close(pr->bsf_h264_to_annexb);
-	av_bitstream_filter_close(pr->bsf_dump_extra);
+	av_bsf_free(&pr->bsf_h264_to_annexb);
+	av_bsf_free(&pr->bsf_dump_extra);
 	
 	for (j = 0; j < pr->n_stream_ids; j++) {
 		av_freep(&sbuffer[j].pkts);
