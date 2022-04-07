@@ -1007,6 +1007,7 @@ int main(int argc, char **argv) {
 	
 	pr->n_stream_ids = 0;
 	pr->stream_ids = 0;
+	pr->in_codec_ctx = (AVCodecContext**) calloc(1, sizeof(AVCodecContext*) * pr->in_fctx->nb_streams);
 	
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
 		AVCodecContext *codec_ctx;
@@ -1038,12 +1039,13 @@ int main(int argc, char **argv) {
 			avcodec_free_context(&codec_ctx);
 			continue;
 		}
+		pr->in_codec_ctx[i] = codec_ctx;
 		
 		// we buffer multiple frames, this avoids that avcodec_decode_video2 overwrites our data
 		codec_ctx->refcounted_frames = 1;
 		
 		if (codec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) { // || codec_ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
-			ret = avcodec_open2(codec_ctx, avcodec_find_decoder(codec_ctx->codec_id), NULL);
+			ret = avcodec_open2(codec_ctx, codec, NULL);
 			if (ret < 0) {
 				av_log(NULL, AV_LOG_ERROR, "Failed to open decoder for stream %u, error %d\n", i, ret);
 				avcodec_free_context(&codec_ctx);
@@ -1090,8 +1092,6 @@ int main(int argc, char **argv) {
 				break;
 			default: break;
 		}
-		
-		avcodec_free_context(&codec_ctx);
 	}
 	
 	av_dump_format(pr->in_fctx, 0, inputf, 0);
@@ -1128,7 +1128,6 @@ int main(int argc, char **argv) {
 	}
 	#endif
 	
-	pr->in_codec_ctx = (AVCodecContext**) calloc(1, sizeof(AVCodecContext*) * pr->in_fctx->nb_streams);
 	pr->out_codec_ctx = (AVCodecContext**) calloc(1, sizeof(AVCodecContext*) * pr->n_stream_ids);
 	
 	// copy most properties from the input streams to the output streams
@@ -1143,21 +1142,7 @@ int main(int argc, char **argv) {
 // 		if (pr->in_fctx->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC)
 // 			continue;
 		
-		
-		dec_par = pr->in_fctx->streams[i]->codecpar;
-		dec_codec = avcodec_find_decoder(dec_par->codec_id);
-		dec_cctx = avcodec_alloc_context3(dec_codec);
-		if (!dec_cctx) {
-			av_log(NULL, AV_LOG_ERROR, "Failed to alloc video decoder context\n");
-			return AVERROR_UNKNOWN;
-		}
-		ret = avcodec_parameters_to_context(dec_cctx, dec_par);
-		if (ret < 0) {
-			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
-			return AVERROR_UNKNOWN;
-		}
-		pr->in_codec_ctx[i] = dec_cctx;
-		
+		dec_cctx = pr->in_codec_ctx[i];
 		
 		out_stream = avformat_new_stream(pr->out_fctx, NULL);
 		if (!out_stream) {
