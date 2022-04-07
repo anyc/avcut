@@ -542,6 +542,15 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 			enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 	}
 	
+	// We have to call this here as avformat_write_header() changes the time_base
+	// and if we reopen the encoder we do not call that fct again to set the same
+	// time base as before.
+	ret = avformat_init_output(pr->out_fctx, 0);
+	if (ret < 0) {
+		av_log(NULL, AV_LOG_ERROR, "avformat_init_output failed: %s\n", av_err2str(ret));
+		return ret;
+	}
+	
 	return 0;
 }
 
