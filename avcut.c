@@ -724,17 +724,19 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			#ifndef USING_LIBAV
 			frame->pts = av_frame_get_best_effort_timestamp(frame);
 			#else
-			if (frame->best_effort_timestamp != AV_NOPTS_VALUE)
+			if (frame->best_effort_timestamp != AV_NOPTS_VALUE) {
 				frame->pts = frame->best_effort_timestamp;
-			else
+			} else {
 				frame->pts = frame->pkt_dts;
+			}
 			#endif
 			
-			// convert from packet to frame time_base, if necessary
+			// if pts is set from pkt_dts, convert from packet to frame time_base
 			if (frame->pts == frame->pkt_dts)
-				frame->pts = av_rescale_q(frame->pts,
-							pr->in_fctx->streams[stream_index]->time_base,
-							pr->in_codec_ctx[stream_index]->time_base);
+				frame->pts = av_rescale_q(frame->pkt_pts,
+						pr->in_fctx->streams[stream_index]->time_base,
+						pr->in_codec_ctx[stream_index]->time_base
+					);
 			
 			// The last frames in some AVIs have a DTS of zero. Here, we
 			// override the PTS (copied from DTS) in such a case to provide
@@ -747,7 +749,19 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				frame->pts = new_pts;
 			}
 			
+			if (frame->pkt_pts == AV_NOPTS_VALUE) {
+				frame->pkt_pts = av_rescale_q(frame->pts,
+						pr->in_codec_ctx[stream_index]->time_base,
+						pr->in_fctx->streams[stream_index]->time_base
+				)	;
+			}
+			
 			sbuffer->last_pts = frame->pts;
+			
+			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
+				   frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
+				   frame->pts*av_q2d(pr->in_codec_ctx[stream_index]->time_base)
+				);
 			
 			// the first packet in the video buffer is an I frame, if the
 			// current packet contains another I frame, flush the buffer
