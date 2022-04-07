@@ -1064,6 +1064,24 @@ int main(int argc, char **argv) {
 		}
 		pr->in_codec_ctx[i] = codec_ctx;
 		
+		if (codec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) {
+			codec_ctx->framerate = av_guess_frame_rate(pr->in_codec_ctx[i], pr->in_fctx->streams[i], NULL);
+			codec_ctx->time_base = av_inv_q(codec_ctx->framerate);
+		} else {
+			codec_ctx->time_base = (AVRational){1, codec_ctx->sample_rate};
+		}
+		
+		#define MYCMP(prop, fmt) av_log(NULL, AV_LOG_ERROR, fmt " " fmt "\n", codec_ctx->prop, pr->in_fctx->streams[i]->codec->prop);
+		
+		MYCMP(codec_type, "%d");
+		MYCMP(codec_id, "%d");
+		MYCMP(codec_tag, "%d");
+		MYCMP(bit_rate, "%d");
+		MYCMP(profile, "%d");
+		MYCMP(pix_fmt, "%d");
+		MYCMP(has_b_frames, "%d");
+		MYCMP(codec_id, "%d");
+		
 		// we buffer multiple frames, this avoids that avcodec_decode_video2 overwrites our data
 		codec_ctx->refcounted_frames = 1;
 		
