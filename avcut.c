@@ -18,6 +18,15 @@
  *
  */
 
+/*
+ * To inspect how ffmpeg would decode frames:
+ * 
+ * ffprobe -show_frames  -of compact -select_streams v:0 -show_entries \
+ * 		frame=key_frame,pkt_pts,pkt_dts,best_effort_timestamp,pkt_pts_time \
+ * 		<file>
+ * 
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
