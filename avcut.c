@@ -710,24 +710,37 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 	
 	got_frame = 0;
 	if (mtype == AVMEDIA_TYPE_VIDEO) {
-		if (!(frame = av_frame_alloc())) {
-			av_log(NULL, AV_LOG_ERROR, "error while allocating frame\n");
-			return AVERROR(ENOMEM);
-		}
+		av_log(NULL, AV_LOG_DEBUG, "dec packet %" PRId64 " %" PRId64 " %" PRId64 "\n",
+			   packet->pts, packet->dts, packet->size);
 		
-		ret = avcodec_decode_video2(pr->in_codec_ctx[stream_index], frame, &got_frame, packet);
-		
+		ret = avcodec_send_packet(pr->in_codec_ctx[stream_index], packet);
 		if (ret < 0) {
-			av_frame_free(&frame);
-			av_log(NULL, AV_LOG_ERROR, "Decoding frame failed\n");
+			av_log(NULL, AV_LOG_ERROR, "avcodec_send_packet() failed: %d\n", ret);
 			return ret;
 		}
 		
-		if (got_frame) {
-// 			av_log(NULL, AV_LOG_DEBUG, "dec frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
-// 				  frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
-// 				  frame->pts*av_q2d(pr->in_fctx->streams[stream_index]->codec->time_base)
-// 			);
+		while (1) {
+			if (!(frame = av_frame_alloc())) {
+				av_log(NULL, AV_LOG_ERROR, "error while allocating frame\n");
+				return AVERROR(ENOMEM);
+			}
+			
+			ret = avcodec_receive_frame(pr->in_codec_ctx[stream_index], frame);
+			if (ret == -EAGAIN) {
+				av_frame_free(&frame);
+				break;
+			}
+			
+			if (ret < 0) {
+				av_log(NULL, AV_LOG_ERROR, "avcodec_receive_frame failed: %d\n", ret);
+				av_frame_free(&frame);
+				return ret;
+			}
+			
+			av_log(NULL, AV_LOG_DEBUG, "dec frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
+				  frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
+				  frame->pts*av_q2d(pr->in_fctx->streams[stream_index]->codec->time_base)
+				);
 			
 			sbuffer[stream_index].frames[sbuffer[stream_index].n_frames] = frame;
 			sbuffer[stream_index].n_frames++;
@@ -793,8 +806,6 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				if (n_finished_streams == pr->n_stream_ids)
 					pr->last_flush = 1;
 			}
-		} else {
-			av_frame_free(&frame);
 		}
 	}
 	
