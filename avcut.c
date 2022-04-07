@@ -759,7 +759,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			
 			// if pts is set from pkt_dts, convert from packet to frame time_base
 			if (frame->pts == frame->pkt_dts)
-				frame->pts = av_rescale_q(frame->pkt_pts,
+				frame->pts = av_rescale_q(frame->pkt_dts,
 						pr->in_fctx->streams[stream_index]->time_base,
 						pr->in_codec_ctx[stream_index]->time_base
 					);
@@ -775,6 +775,8 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				frame->pts = new_pts;
 			}
 			
+			#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(56,56,0)
+			// pkt_pts is deprecated
 			if (frame->pkt_pts == AV_NOPTS_VALUE) {
 				frame->pkt_pts = av_rescale_q(frame->pts,
 						pr->in_codec_ctx[stream_index]->time_base,
@@ -782,12 +784,18 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				)	;
 			}
 			
-			sbuffer->last_pts = frame->pts;
-			
 			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
-				   frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
-				   frame->pts*av_q2d(pr->in_codec_ctx[stream_index]->time_base)
+				frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
+				frame->pts*av_q2d(pr->in_codec_ctx[stream_index]->time_base)
 				);
+			#else
+			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " pkt_size: %d type: %c to %f\n",
+				frame->pts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
+				frame->pts*av_q2d(pr->in_codec_ctx[stream_index]->time_base)
+				);
+			#endif
+			
+			sbuffer->last_pts = frame->pts;
 			
 			// the first packet in the video buffer is an I frame, if the
 			// current packet contains another I frame, flush the buffer
