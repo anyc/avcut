@@ -216,14 +216,16 @@ char ts_included(struct project *pr, double ts) {
 	return 1;
 }
 
-#define BUF_COPY_COMPLETE 1<<0
-#define BUF_DROP_COMPLETE 1<<1
-#define BUF_CUT_IN_BETWEEN 1<<2
+#define BUF_COPY_COMPLETE (1<<0)
+#define BUF_DROP_COMPLETE (1<<1)
+#define BUF_CUT_IN_BETWEEN (1<<2)
 
 // check if the complete buffer will be used or if a cutpoint lies in this interval
 char get_buffer_processing_mode(struct project *pr, struct packet_buffer *s, unsigned long last_iframe) {
 	double buf_start, buf_end;
 	size_t i;
+	char rv;
+	
 	
 	if (!last_iframe) {
 		buf_start = s->pkts[0].pts * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base);
@@ -233,28 +235,38 @@ char get_buffer_processing_mode(struct project *pr, struct packet_buffer *s, uns
 		buf_end = frame_pts2ts(pr, s, s->frames[last_iframe]);
 	}
 	
-	av_log(NULL, AV_LOG_DEBUG, "check buffer stream %u: %f to %f\n", s->stream_index, buf_start, buf_end);
-	
+	rv = 0;
 	for (i=0; i < pr->n_cuts; i++) {
 		// check if any cutpoint lies between buffer start and end
 		if (buf_start < pr->cuts[i] && pr->cuts[i] < buf_end)
-			return BUF_CUT_IN_BETWEEN;
+			rv = BUF_CUT_IN_BETWEEN;
 		
 		// check if buffer lies between cutpoints
 		if (pr->cuts[i] <= buf_start && buf_end <= pr->cuts[i+1]) {
 			if (i % 2 == 0)
-				return BUF_DROP_COMPLETE;
+				rv = BUF_DROP_COMPLETE;
 			else
-				return BUF_COPY_COMPLETE;
+				rv = BUF_COPY_COMPLETE;
 		}
 		
 		// stop this loop if further cuts lie behind current buffer
 		if (buf_end < pr->cuts[i])
-			return BUF_COPY_COMPLETE;
+			rv = BUF_COPY_COMPLETE;
+		
+		if (rv)
+			break;
 	}
 	
 	// if we are past all cutpoints, copy the remaining video
-	return BUF_COPY_COMPLETE;
+	if (rv == 0)
+		rv = BUF_COPY_COMPLETE;
+	
+	av_log(NULL, AV_LOG_DEBUG, "check buffer stream %u: %f to %f -> %s\n",
+		   s->stream_index, buf_start, buf_end,
+		   (rv == BUF_COPY_COMPLETE ? "copy": (rv == BUF_DROP_COMPLETE ? "drop": "cut in between"))
+		   );
+	
+	return rv;
 }
 
 // get the number of dropped frames prior to source timestamp $ts
