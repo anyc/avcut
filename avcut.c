@@ -171,12 +171,12 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		av_init_packet(&enc_pkt);
 		
 		ret = avcodec_receive_packet(codec_ctx, &enc_pkt);
-		if (ret == -EAGAIN) {
+		if (ret == -EAGAIN || ret == AVERROR_EOF) {
 			return ret;
 		}
 		
 		if (ret < 0) {
-			av_log(NULL, AV_LOG_ERROR, "avcodec_receive_frame failed: %d\n", ret);
+			av_log(NULL, AV_LOG_ERROR, "avcodec_receive_packet failed: %s (%d)\n", av_err2str(ret), ret);
 			return ret;
 		}
 		
@@ -894,7 +894,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 // decode a video packet and store it in the buffer
 int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned int stream_index, AVPacket *packet) {
 	enum AVMediaType mtype;
-	int got_frame, ret, i;
+	int ret, i;
 	AVFrame *frame = NULL;
 	AVPacket nullpacket = { .data = NULL, .size = 0 };
 	
@@ -903,7 +903,6 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 	
 	mtype = pr->in_fctx->streams[stream_index]->codecpar->codec_type;
 	
-	got_frame = 0;
 	if (mtype == AVMEDIA_TYPE_VIDEO) {
 		av_log(NULL, AV_LOG_DEBUG, "dec packet %" PRId64 " %" PRId64 " %d\n",
 			   packet->pts, packet->dts, packet->size);
@@ -921,9 +920,9 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			}
 			
 			ret = avcodec_receive_frame(pr->in_codec_ctx[stream_index], frame);
-			if (ret == -EAGAIN) {
+			if (ret == -EAGAIN || ret == AVERROR_EOF) {
 				av_frame_free(&frame);
-				break;
+				return 0;
 			}
 			
 			if (ret < 0) {
@@ -1014,7 +1013,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 		}
 	}
 	
-	return got_frame;
+	return 0;
 }
 
 int parse_profile(struct project *pr, char *profile) {
@@ -1596,7 +1595,7 @@ int main(int argc, char **argv) {
 		
 		// decode packet (and start flushing the buffer if necessary)
 		ret = decode_packet(pr, sbuffer, stream_index, &packet);
-		if (ret < 0)
+		if (ret < 0 && ret != AVERROR_EOF)
 			return ret;
 	}
 	
