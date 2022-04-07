@@ -54,6 +54,12 @@
 #endif
 #endif
 
+#ifdef DEBUG
+// only enable debug output for this file
+#define av_log(null, level, fmt, ...) printf(fmt, ##__VA_ARGS__)
+#endif
+
+
 // buffer management struct for a stream
 struct packet_buffer {
 	unsigned int stream_index;
@@ -1049,7 +1055,7 @@ int main(int argc, char **argv) {
 	}
 	
 	#ifdef DEBUG
-	av_log_set_level(AV_LOG_DEBUG);
+// 	av_log_set_level(AV_LOG_DEBUG);
 	#else
 	if (verbosity_level)
 		av_log_set_level(atoi(verbosity_level));
@@ -1123,25 +1129,6 @@ int main(int argc, char **argv) {
 		} else {
 			codec_ctx->time_base = (AVRational){1, codec_ctx->sample_rate};
 		}
-		
-		#define MYCMP(prop, fmt) av_log(NULL, AV_LOG_ERROR, fmt " " fmt "\n", codec_ctx->prop, pr->in_fctx->streams[i]->codec->prop);
-		
-		MYCMP(codec_type, "%d");
-		MYCMP(codec_id, "%d");
-		MYCMP(codec_tag, "%d");
-		MYCMP(bit_rate, "%d");
-		MYCMP(profile, "%d");
-		MYCMP(pix_fmt, "%d");
-		MYCMP(has_b_frames, "%d");
-		MYCMP(codec_id, "%d");
-		MYCMP(framerate, "%f");
-		
-		printf("\n");
-		printf("%d %d\n", pr->in_fctx->streams[i]->time_base.num, pr->in_fctx->streams[i]->time_base.den);
-		printf("%d %d %d\n", codec_ctx->time_base.num, codec_ctx->time_base.den,  codec_ctx->ticks_per_frame);
-		printf("%d %d\n", codec_ctx->framerate.num, codec_ctx->framerate.den );
-		printf("%d %d\n", pr->in_fctx->streams[i]->codec->time_base.num, pr->in_fctx->streams[i]->codec->time_base.den);
-// 		exit(1);
 		
 		if (codec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) { // || codec_ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
 			ret = avcodec_open2(codec_ctx, codec, NULL);
@@ -1394,9 +1381,6 @@ int main(int argc, char **argv) {
 			if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
 				enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 		}
-		out_stream->codecpar->codec_tag = enc_cctx->codec_tag;
-		printf("dtype %d %d %x\n", dec_par->codec_type, dec_par->codec_id, dec_par->codec_tag);
-		printf("etype %d %d %x\n", out_stream->codecpar->codec_type, out_stream->codecpar->codec_id, out_stream->codecpar->codec_tag);
 	}
 	
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
