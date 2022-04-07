@@ -517,7 +517,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				
 				frame_written = 1;
 			} else {
-				s->duration_dropped_pkts += av_frame_get_pkt_duration(s->frames[i]);
+				s->duration_dropped_pkts += s->frames[i]->pkt_duration;
 				av_frame_free(&s->frames[i]);
 			}
 		}
@@ -592,7 +592,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				
 				av_log(NULL, AV_LOG_DEBUG, "pkt_pts pkt_dts frame->pkt_dts frame->pts frame->best_eff - frame->pkt_size pkt_size - cpn\n");
 				for (j=0;j<s->n_frames;j++) {
-					av_log(NULL, AV_LOG_DEBUG, "%" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " - %6d %6d - %d type: %c (NOPTS: %" PRId64 ")\n",
+					av_log(NULL, AV_LOG_DEBUG, "%" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " - %6d %6d - %d type: %c (NOPTS: %" PRId64 ")\n",
 						s->pkts[i].pts, s->pkts[i].dts, s->frames[j]->pkt_dts,
 						s->frames[j]->pts,
 						s->frames[j]->best_effort_timestamp,
@@ -710,7 +710,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 	
 	got_frame = 0;
 	if (mtype == AVMEDIA_TYPE_VIDEO) {
-		av_log(NULL, AV_LOG_DEBUG, "dec packet %" PRId64 " %" PRId64 " %" PRId64 "\n",
+		av_log(NULL, AV_LOG_DEBUG, "dec packet %" PRId64 " %" PRId64 " %d\n",
 			   packet->pts, packet->dts, packet->size);
 		
 		ret = avcodec_send_packet(pr->in_codec_ctx[stream_index], packet);
@@ -737,10 +737,12 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				return ret;
 			}
 			
+			#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(56,56,0)
 			av_log(NULL, AV_LOG_DEBUG, "dec frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
 				  frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
 				  frame->pts*av_q2d(pr->in_fctx->streams[stream_index]->codec->time_base)
 				);
+			#endif
 			
 			sbuffer[stream_index].frames[sbuffer[stream_index].n_frames] = frame;
 			sbuffer[stream_index].n_frames++;
@@ -748,7 +750,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			pr->video_packets_decoded++;
 			
 			#ifndef USING_LIBAV
-			frame->pts = av_frame_get_best_effort_timestamp(frame);
+			frame->pts = frame->best_effort_timestamp;
 			#else
 			if (frame->best_effort_timestamp != AV_NOPTS_VALUE) {
 				frame->pts = frame->best_effort_timestamp;
@@ -1050,7 +1052,10 @@ int main(int argc, char **argv) {
 			return ret;
 	}
 	
+	// TODO precise version
+	#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(56,56,0)
 	av_register_all();
+	#endif
 	
 	/*
 	 * open input file
@@ -1104,7 +1109,7 @@ int main(int argc, char **argv) {
 		pr->in_codec_ctx[i] = codec_ctx;
 		
 		if (codec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) {
-			codec_ctx->framerate = av_guess_frame_rate(pr->in_codec_ctx[i], pr->in_fctx->streams[i], NULL);
+			codec_ctx->framerate = av_guess_frame_rate(pr->in_fctx, pr->in_fctx->streams[i], NULL);
 			codec_ctx->time_base = av_inv_q(codec_ctx->framerate);
 		} else {
 			codec_ctx->time_base = (AVRational){1, codec_ctx->sample_rate};
@@ -1120,6 +1125,14 @@ int main(int argc, char **argv) {
 		MYCMP(pix_fmt, "%d");
 		MYCMP(has_b_frames, "%d");
 		MYCMP(codec_id, "%d");
+		MYCMP(framerate, "%f");
+		
+		printf("\n");
+		printf("%d %d\n", pr->in_fctx->streams[i]->time_base.num, pr->in_fctx->streams[i]->time_base.den);
+		printf("%d %d %d\n", codec_ctx->time_base.num, codec_ctx->time_base.den,  codec_ctx->ticks_per_frame);
+		printf("%d %d\n", codec_ctx->framerate.num, codec_ctx->framerate.den );
+		printf("%d %d\n", pr->in_fctx->streams[i]->codec->time_base.num, pr->in_fctx->streams[i]->codec->time_base.den);
+// 		exit(1);
 		
 		if (codec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) { // || codec_ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
 			ret = avcodec_open2(codec_ctx, codec, NULL);
@@ -1211,8 +1224,6 @@ int main(int argc, char **argv) {
 	for (j = 0; j < pr->n_stream_ids; j++) {
 		AVStream *out_stream;
 		AVCodecContext *dec_cctx, *enc_cctx;
-		AVCodecParameters *dec_par, *enc_par;
-		AVCodec *dec_codec, *enc_codec;
 		
 		i = pr->stream_ids[j];
 		
