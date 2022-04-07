@@ -372,6 +372,179 @@ char find_packet_for_frame(struct project *pr, struct packet_buffer *s, size_t f
 	return 0;
 }
 
+int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
+	unsigned int i;
+	int ret;
+	AVStream *out_stream;
+	AVCodecContext *dec_cctx, *enc_cctx;
+	
+	
+	i = pr->stream_ids[enc_stream_idx];
+	
+// 	if (pr->in_fctx->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC)
+// 		continue;
+	
+	dec_cctx = pr->in_codec_ctx[i];
+	
+	out_stream = avformat_new_stream(pr->out_fctx, NULL);
+	if (!out_stream) {
+		av_log(NULL, AV_LOG_ERROR, "Failed allocating output stream\n");
+		return AVERROR_UNKNOWN;
+	}
+	
+	// NOTE already set by avformat_new_stream?
+	pr->out_fctx->streams[enc_stream_idx] = out_stream;
+	
+	// copy stream metadata
+	av_dict_copy(&out_stream->metadata, pr->in_fctx->streams[i]->metadata, 0);
+	
+// 	enc_par = out_stream->codecpar;
+// 	enc_codec = avcodec_find_encoder(dec_par->codec_id);
+	enc_cctx = avcodec_alloc_context3(NULL);
+	if (!enc_cctx) {
+		av_log(NULL, AV_LOG_ERROR, "Failed to alloc video decoder context\n");
+		return AVERROR_UNKNOWN;
+	}
+	ret = avcodec_parameters_copy(out_stream->codecpar, pr->in_fctx->streams[i]->codecpar);
+	if (ret < 0) {
+		av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
+		return AVERROR_UNKNOWN;
+	}
+	
+	out_stream->time_base = pr->in_fctx->streams[i]->time_base;
+	
+	ret = avcodec_parameters_to_context(enc_cctx, out_stream->codecpar);
+	if (ret < 0) {
+		av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
+		return AVERROR_UNKNOWN;
+	}
+	pr->out_codec_ctx[enc_stream_idx] = enc_cctx;
+	
+	if (dec_cctx->codec_type == AVMEDIA_TYPE_VIDEO) {
+		AVCodec *encoder;
+		
+		encoder = avcodec_find_encoder(enc_cctx->codec_id);
+		if (!encoder) {
+			av_log(NULL, AV_LOG_ERROR, "Encoder not found\n");
+			avcodec_free_context(&dec_cctx);
+			avcodec_free_context(&enc_cctx);
+			return AVERROR_INVALIDDATA;
+		}
+		
+		if (pr->profile) {
+			ret = avcodec_get_context_defaults3(enc_cctx, encoder);
+			if (ret < 0) {
+				av_log(NULL, AV_LOG_ERROR, "Setting codec defaults failed\n");
+				avcodec_free_context(&dec_cctx);
+				avcodec_free_context(&enc_cctx);
+				return ret;
+			}
+			
+			enc_cctx->time_base = dec_cctx->time_base;
+			enc_cctx->ticks_per_frame = dec_cctx->ticks_per_frame;
+			enc_cctx->delay = dec_cctx->delay;
+			enc_cctx->width = dec_cctx->width;
+			enc_cctx->height = dec_cctx->height;
+			enc_cctx->pix_fmt = dec_cctx->pix_fmt;
+			enc_cctx->sample_aspect_ratio = dec_cctx->sample_aspect_ratio;
+			enc_cctx->color_primaries = dec_cctx->color_primaries;
+			enc_cctx->color_trc = dec_cctx->color_trc;
+			enc_cctx->colorspace = dec_cctx->colorspace;
+			enc_cctx->color_range = dec_cctx->color_range;
+			enc_cctx->chroma_sample_location = dec_cctx->chroma_sample_location;
+			enc_cctx->profile = dec_cctx->profile;
+			enc_cctx->level = dec_cctx->level;
+			
+			av_log(NULL, AV_LOG_INFO, "Settings from profile:\n");
+			av_log(NULL, AV_LOG_INFO, "  Preset: %s\n", pr->profile->preset);
+			av_log(NULL, AV_LOG_INFO, "  Tune: %s\n", pr->profile->tune);
+			av_log(NULL, AV_LOG_INFO, "  x264opts: %s\n", pr->profile->x264opts);
+			
+			av_opt_set(enc_cctx->priv_data, "preset", pr->profile->preset, AV_OPT_SEARCH_CHILDREN);
+			av_opt_set(enc_cctx->priv_data, "tune", pr->profile->tune, AV_OPT_SEARCH_CHILDREN);
+			av_opt_set(enc_cctx->priv_data, "x264opts", pr->profile->x264opts, AV_OPT_SEARCH_CHILDREN);
+		} else {
+			AVCodecParameters *params;
+			
+			params = avcodec_parameters_alloc();
+			
+			ret = avcodec_parameters_from_context(params, dec_cctx);
+			if (ret < 0) {
+				av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 1\n");
+				avcodec_free_context(&dec_cctx);
+				avcodec_free_context(&enc_cctx);
+				return ret;
+			}
+			ret = avcodec_parameters_to_context(enc_cctx, params);
+			if (ret < 0) {
+				av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 2\n");
+				avcodec_free_context(&dec_cctx);
+				avcodec_free_context(&enc_cctx);
+				return ret;
+			}
+			
+			// TODO good values?
+			enc_cctx->qmin = 16;
+			enc_cctx->qmax = 26;
+			enc_cctx->max_qdiff = 4;
+		}
+		
+		if (dec_cctx->has_b_frames) {
+			enc_cctx->max_b_frames = 3;
+			if (pr->has_b_frames < dec_cctx->has_b_frames)
+				pr->has_b_frames = dec_cctx->has_b_frames;
+		}
+// 		enc_cctx->keyint_min = 200;
+// 		enc_cctx->gop_size = 250;
+		enc_cctx->thread_count = 1; // spawning more threads causes avcodec_close to free threads multiple times
+		enc_cctx->codec_tag = 0; // reset tag to avoid incompatibilities while changing container
+		
+		out_stream->sample_aspect_ratio = pr->in_fctx->streams[i]->sample_aspect_ratio;
+		
+		if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
+			enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+		
+		// TODO is this a good approach?
+		if (enc_cctx->time_base.num <= 0 || enc_cctx->time_base.den <= 0)
+			enc_cctx->time_base = out_stream->time_base;
+		
+		ret = avcodec_open2(enc_cctx, encoder, NULL);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to open encoder for stream %u, error %d\n", i, ret);
+			return ret;
+		}
+	} else if (dec_cctx->codec_type == AVMEDIA_TYPE_UNKNOWN) {
+		av_log(NULL, AV_LOG_ERROR, "Error: input stream #%d is of unknown type\n", i);
+		avcodec_free_context(&dec_cctx);
+		avcodec_free_context(&enc_cctx);
+		return AVERROR_INVALIDDATA;
+	} else {
+		AVCodecParameters params = {0};
+		
+		ret = avcodec_parameters_from_context(&params, dec_cctx);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 1\n");
+			avcodec_free_context(&dec_cctx);
+			avcodec_free_context(&enc_cctx);
+			return ret;
+		}
+		ret = avcodec_parameters_to_context(enc_cctx, &params);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 2\n");
+			avcodec_free_context(&dec_cctx);
+			avcodec_free_context(&enc_cctx);
+			return ret;
+		}
+		
+		enc_cctx->codec_tag = 0;
+		
+		if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
+			enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+	}
+	
+	return 0;
+}
+
 // process packet buffer - either copy, ignore or reencode packets in the packet buffer according to the cut list
 void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_flush) {
 	size_t i, j, last_pkt;
@@ -567,6 +740,13 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			
 			if (out_cctx->codec->capabilities & AV_CODEC_CAP_ENCODER_FLUSH) {
 				avcodec_flush_buffers(out_cctx);
+			} else {
+				avcodec_close(out_cctx);
+				ret = open_encoder(pr, s->stream_index);
+				if (ret) {
+					av_log(NULL, AV_LOG_ERROR, "reopening encoder failed\n");
+					exit(1);
+				}
 			}
 		}
 	} else
@@ -747,7 +927,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			}
 			
 			if (ret < 0) {
-				av_log(NULL, AV_LOG_ERROR, "avcodec_receive_frame failed: %d\n", ret);
+				av_log(NULL, AV_LOG_ERROR, "avcodec_receive_frame failed: %s\n", av_err2str(ret));
 				av_frame_free(&frame);
 				return ret;
 			}
@@ -1218,169 +1398,9 @@ int main(int argc, char **argv) {
 	
 	// copy most properties from the input streams to the output streams
 	for (j = 0; j < pr->n_stream_ids; j++) {
-		AVStream *out_stream;
-		AVCodecContext *dec_cctx, *enc_cctx;
-		
-		i = pr->stream_ids[j];
-		
-// 		if (pr->in_fctx->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC)
-// 			continue;
-		
-		dec_cctx = pr->in_codec_ctx[i];
-		
-		out_stream = avformat_new_stream(pr->out_fctx, NULL);
-		if (!out_stream) {
-			av_log(NULL, AV_LOG_ERROR, "Failed allocating output stream\n");
-			return AVERROR_UNKNOWN;
-		}
-		
-		// NOTE already set by avformat_new_stream?
-		pr->out_fctx->streams[j] = out_stream;
-		
-		// copy stream metadata
-		av_dict_copy(&out_stream->metadata, pr->in_fctx->streams[i]->metadata, 0);
-		
-// 		enc_par = out_stream->codecpar;
-// 		enc_codec = avcodec_find_encoder(dec_par->codec_id);
-		enc_cctx = avcodec_alloc_context3(NULL);
-		if (!enc_cctx) {
-			av_log(NULL, AV_LOG_ERROR, "Failed to alloc video decoder context\n");
-			return AVERROR_UNKNOWN;
-		}
-		ret = avcodec_parameters_copy(out_stream->codecpar, pr->in_fctx->streams[i]->codecpar);
-		if (ret < 0) {
-			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
-			return AVERROR_UNKNOWN;
-		}
-		
-		out_stream->time_base = pr->in_fctx->streams[i]->time_base;
-		
-		ret = avcodec_parameters_to_context(enc_cctx, out_stream->codecpar);
-		if (ret < 0) {
-			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
-			return AVERROR_UNKNOWN;
-		}
-		pr->out_codec_ctx[j] = enc_cctx;
-		
-		if (dec_cctx->codec_type == AVMEDIA_TYPE_VIDEO) {
-			AVCodec *encoder;
-			
-			encoder = avcodec_find_encoder(enc_cctx->codec_id);
-			if (!encoder) {
-				av_log(NULL, AV_LOG_ERROR, "Encoder not found\n");
-				avcodec_free_context(&dec_cctx);
-				avcodec_free_context(&enc_cctx);
-				return AVERROR_INVALIDDATA;
-			}
-			
-			if (pr->profile) {
-				ret = avcodec_get_context_defaults3(enc_cctx, encoder);
-				if (ret < 0) {
-					av_log(NULL, AV_LOG_ERROR, "Setting codec defaults failed\n");
-					avcodec_free_context(&dec_cctx);
-					avcodec_free_context(&enc_cctx);
-					return ret;
-				}
-				
-				enc_cctx->time_base = dec_cctx->time_base;
-				enc_cctx->ticks_per_frame = dec_cctx->ticks_per_frame;
-				enc_cctx->delay = dec_cctx->delay;
-				enc_cctx->width = dec_cctx->width;
-				enc_cctx->height = dec_cctx->height;
-				enc_cctx->pix_fmt = dec_cctx->pix_fmt;
-				enc_cctx->sample_aspect_ratio = dec_cctx->sample_aspect_ratio;
-				enc_cctx->color_primaries = dec_cctx->color_primaries;
-				enc_cctx->color_trc = dec_cctx->color_trc;
-				enc_cctx->colorspace = dec_cctx->colorspace;
-				enc_cctx->color_range = dec_cctx->color_range;
-				enc_cctx->chroma_sample_location = dec_cctx->chroma_sample_location;
-				enc_cctx->profile = dec_cctx->profile;
-				enc_cctx->level = dec_cctx->level;
-				
-				av_log(NULL, AV_LOG_INFO, "Settings from profile:\n");
-				av_log(NULL, AV_LOG_INFO, "  Preset: %s\n", pr->profile->preset);
-				av_log(NULL, AV_LOG_INFO, "  Tune: %s\n", pr->profile->tune);
-				av_log(NULL, AV_LOG_INFO, "  x264opts: %s\n", pr->profile->x264opts);
-				
-				av_opt_set(enc_cctx->priv_data, "preset", pr->profile->preset, AV_OPT_SEARCH_CHILDREN);
-				av_opt_set(enc_cctx->priv_data, "tune", pr->profile->tune, AV_OPT_SEARCH_CHILDREN);
-				av_opt_set(enc_cctx->priv_data, "x264opts", pr->profile->x264opts, AV_OPT_SEARCH_CHILDREN);
-			} else {
-				AVCodecParameters params;
-				
-				ret = avcodec_parameters_from_context(&params, dec_cctx);
-				if (ret < 0) {
-					av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 1\n");
-					avcodec_free_context(&dec_cctx);
-					avcodec_free_context(&enc_cctx);
-					return ret;
-				}
-				ret = avcodec_parameters_to_context(enc_cctx, &params);
-				if (ret < 0) {
-					av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 2\n");
-					avcodec_free_context(&dec_cctx);
-					avcodec_free_context(&enc_cctx);
-					return ret;
-				}
-				
-				// TODO good values?
-				enc_cctx->qmin = 16;
-				enc_cctx->qmax = 26;
-				enc_cctx->max_qdiff = 4;
-			}
-			
-			if (dec_cctx->has_b_frames) {
-				enc_cctx->max_b_frames = 3;
-				if (pr->has_b_frames < dec_cctx->has_b_frames)
-					pr->has_b_frames = dec_cctx->has_b_frames;
-			}
-// 			enc_cctx->keyint_min = 200;
-// 			enc_cctx->gop_size = 250;
-			enc_cctx->thread_count = 1; // spawning more threads causes avcodec_close to free threads multiple times
-			enc_cctx->codec_tag = 0; // reset tag to avoid incompatibilities while changing container
-			
-			out_stream->sample_aspect_ratio = pr->in_fctx->streams[i]->sample_aspect_ratio;
-			
-			if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
-				enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-			
-			// TODO is this a good approach?
-			if (enc_cctx->time_base.num <= 0 || enc_cctx->time_base.den <= 0)
-				enc_cctx->time_base = out_stream->time_base;
-			
-			ret = avcodec_open2(enc_cctx, encoder, NULL);
-			if (ret < 0) {
-				av_log(NULL, AV_LOG_ERROR, "Failed to open encoder for stream %u, error %d\n", i, ret);
-				return ret;
-			}
-		} else if (dec_cctx->codec_type == AVMEDIA_TYPE_UNKNOWN) {
-			av_log(NULL, AV_LOG_ERROR, "Error: input stream #%d is of unknown type\n", i);
-			avcodec_free_context(&dec_cctx);
-			avcodec_free_context(&enc_cctx);
-			return AVERROR_INVALIDDATA;
-		} else {
-			AVCodecParameters params;
-			
-			ret = avcodec_parameters_from_context(&params, dec_cctx);
-			if (ret < 0) {
-				av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 1\n");
-				avcodec_free_context(&dec_cctx);
-				avcodec_free_context(&enc_cctx);
-				return ret;
-			}
-			ret = avcodec_parameters_to_context(enc_cctx, &params);
-			if (ret < 0) {
-				av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 2\n");
-				avcodec_free_context(&dec_cctx);
-				avcodec_free_context(&enc_cctx);
-				return ret;
-			}
-			
-			enc_cctx->codec_tag = 0;
-			
-			if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
-				enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-		}
+		ret = open_encoder(pr, j);
+		if (ret)
+			return ret;
 	}
 	
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
