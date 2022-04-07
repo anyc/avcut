@@ -142,9 +142,9 @@ void av_packet_rescale_ts(AVPacket *pkt, AVRational src_tb, AVRational dst_tb)
 #endif
 
 // encode a frame and write the resulting packet into the output file
-int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *frame, int *got_frame_p) {
+int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *frame) {
 	AVPacket enc_pkt = { .data = NULL, .size = 0 };
-	int got_frame, ret;
+	int ret;
 	AVStream *ostream = pr->out_fctx->streams[s->stream_index];
 	AVCodecContext *codec_ctx = pr->out_codec_ctx[s->stream_index];
 	
@@ -155,15 +155,25 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 			frame->pts * av_q2d(codec_ctx->time_base)
 			);
 	
-	av_init_packet(&enc_pkt);
-	
-	ret = avcodec_encode_video2(codec_ctx, &enc_pkt, frame, &got_frame);
+	ret = avcodec_send_frame(codec_ctx, frame);
 	if (ret < 0) {
-		av_log(NULL, AV_LOG_ERROR, "error while encoding frame, error %d\n", ret);
+		av_log(NULL, AV_LOG_ERROR, "avcodec_send_frame() failed: %s\n", av_err2str(ret));
 		return ret;
 	}
 	
-	if (got_frame) {
+	while (1) {
+		av_init_packet(&enc_pkt);
+		
+		ret = avcodec_receive_packet(codec_ctx, &enc_pkt);
+		if (ret == -EAGAIN) {
+			return ret;
+		}
+		
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "avcodec_receive_frame failed: %d\n", ret);
+			return ret;
+		}
+		
 		pr->video_frames_encoded++;
 		
 		enc_pkt.stream_index = s->stream_index;
@@ -204,9 +214,6 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		// TODO av_frame_unref?
 		av_packet_unref(&enc_pkt);
 	}
-	
-	if (got_frame_p)
-		*got_frame_p = got_frame;
 	
 	return 0;
 }
@@ -509,9 +516,12 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->frames[i]->pict_type = 0;
 				#endif
 				
-				ret = encode_write_frame(pr, s, s->frames[i], 0);
+				ret = encode_write_frame(pr, s, s->frames[i]);
+				if (ret == -EAGAIN) {
+					// ignore, no complete pkt to write yet
+				} else
 				if (ret < 0) {
-					av_log(NULL, AV_LOG_ERROR, "encode_write_frame failed, error %d\n", ret);
+					av_log(NULL, AV_LOG_ERROR, "encode_write_frame failed: %s\n", av_err2str(ret));
 					exit(ret);
 				}
 				
@@ -526,9 +536,11 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		if (frame_written && pr->out_codec_ctx[s->stream_index]->codec->capabilities & AV_CODEC_CAP_DELAY) {
 			av_log(NULL, AV_LOG_DEBUG, "Local flushing stream #%u\n", s->stream_index);
 			while (1) {
-				int got_frame;
-				
-				ret = encode_write_frame(pr, s, 0, &got_frame);
+				ret = encode_write_frame(pr, s, 0);
+				if (ret == AVERROR_EOF) {
+					av_log(NULL, AV_LOG_DEBUG, "flush end\n");
+					break;
+				}
 				if (ret < 0) {
 					#ifndef USING_LIBAV
 					av_log(NULL, AV_LOG_ERROR, "encode_write_frame failed, error %d: %s\n", ret, av_err2str(ret));
@@ -539,10 +551,6 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					#endif
 					exit(ret);
 				}
-				if (!got_frame) {
-					av_log(NULL, AV_LOG_DEBUG, "flush end\n");
-					break;
-				}
 			}
 		}
 		
@@ -551,8 +559,9 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			// Hence, we restart the encoder.
 			AVCodecContext *out_cctx = pr->out_codec_ctx[s->stream_index];
 			
-			out_cctx->codec->close(out_cctx);
-			out_cctx->codec->init(out_cctx);
+			if (out_cctx->codec->capabilities & AV_CODEC_CAP_ENCODER_FLUSH) {
+				avcodec_flush_buffers(out_cctx);
+			}
 		}
 	} else
 	if (buffer_mode & BUF_COPY_COMPLETE) {
