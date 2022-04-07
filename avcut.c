@@ -1191,7 +1191,8 @@ int main(int argc, char **argv) {
 			return AVERROR_UNKNOWN;
 		}
 		
-		out_stream->time_base = pr->in_fctx->streams[i]->time_base;
+		// NOTE already set by avformat_new_stream?
+		pr->out_fctx->streams[j] = out_stream;
 		
 		// copy stream metadata
 		av_dict_copy(&out_stream->metadata, pr->in_fctx->streams[i]->metadata, 0);
@@ -1208,6 +1209,8 @@ int main(int argc, char **argv) {
 			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
 			return AVERROR_UNKNOWN;
 		}
+		
+		out_stream->time_base = pr->in_fctx->streams[i]->time_base;
 		
 		ret = avcodec_parameters_to_context(enc_cctx, out_stream->codecpar);
 		if (ret < 0) {
@@ -1371,7 +1374,13 @@ int main(int argc, char **argv) {
 	
 	long dts_offset = 0;
 	if (pr->has_b_frames) {
-		// determine a safe starting value for the DTS from the GOP size
+		/*
+		 * determine a safe starting value for the DTS from the GOP size
+		 *
+		 * DTS is allowed to be negative in order to satisfy PTS >= DTS requirement.
+		 * We might need to decode a P frame before a B frame while the latter has
+		 * smaller PTS than the P frame.
+		 */
 		
 		long newo;
 		for (j = 0; j < pr->n_stream_ids; j++) {
@@ -1385,17 +1394,18 @@ int main(int argc, char **argv) {
 			// use -gop_size as start for DTS
 			newo = pr->in_codec_ctx[i]->gop_size;
 			newo = 0 - pr->out_codec_ctx[j]->ticks_per_frame *
-				av_rescale_q(newo, pr->out_fctx->streams[j]->time_base, pr->out_codec_ctx[j]->time_base);
+				av_rescale_q(newo, pr->out_codec_ctx[j]->time_base, pr->out_fctx->streams[j]->time_base);
 			
 			if (newo < dts_offset)
 				dts_offset = newo;
 		}
 	}
 	
+	av_log(NULL, AV_LOG_DEBUG, "initial DTS %ld\n", dts_offset);
+	
 	// set the initial DTS for each stream
 	for (j = 0; j < pr->n_stream_ids; j++) {
 		sbuffer[j].next_dts = dts_offset;
-		av_log(NULL, AV_LOG_DEBUG, "initial DTS %u: %.0f\n", j, sbuffer[j].next_dts);
 	}
 	
 	// start processing the input
