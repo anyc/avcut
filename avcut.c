@@ -1178,7 +1178,7 @@ int main(int argc, char **argv) {
 		if (dec_cctx->codec_type == AVMEDIA_TYPE_VIDEO) {
 			AVCodec *encoder;
 			
-			encoder = avcodec_find_encoder(dec_cctx->codec_id);
+			encoder = avcodec_find_encoder(enc_cctx->codec_id);
 			if (!encoder) {
 				av_log(NULL, AV_LOG_ERROR, "Encoder not found\n");
 				avcodec_free_context(&dec_cctx);
@@ -1338,11 +1338,14 @@ int main(int argc, char **argv) {
 			
 			if (pr->out_codec_ctx[j]->time_base.den == 0)
 				continue;
+			if (pr->out_codec_ctx[j]->gop_size == 0)
+				continue;
 			
 			// use -gop_size as start for DTS
 			newo = pr->in_codec_ctx[i]->gop_size;
-			newo = 0 - pr->out_codec_ctx[j]->ticks_per_frame * 
-				av_rescale_q(newo, pr->out_codec_ctx[j]->time_base, pr->out_codec_ctx[j]->time_base);
+			newo = 0 - pr->out_codec_ctx[j]->ticks_per_frame *
+				av_rescale_q(newo, pr->out_fctx->streams[j]->time_base, pr->out_codec_ctx[j]->time_base);
+			
 			if (newo < dts_offset)
 				dts_offset = newo;
 		}
