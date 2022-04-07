@@ -205,7 +205,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		}
 		
 		av_log(NULL, AV_LOG_DEBUG,
-			"write video, enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n",
+			"write video pkt, enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n",
 			enc_pkt.size, enc_pkt.pts, enc_pkt.dts,
 			enc_pkt.pts*ostream->time_base.num/(double)ostream->time_base.den);
 		
@@ -392,8 +392,8 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 		return AVERROR_UNKNOWN;
 	}
 	
-	// NOTE already set by avformat_new_stream?
-	pr->out_fctx->streams[enc_stream_idx] = out_stream;
+	// NOTE setting this will cause segfaults during app cleanup later
+// 	pr->out_fctx->streams[enc_stream_idx] = out_stream;
 	
 	// copy stream metadata
 	av_dict_copy(&out_stream->metadata, pr->in_fctx->streams[i]->metadata, 0);
@@ -852,8 +852,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				}
 				
 				av_log(NULL, AV_LOG_DEBUG,
-					"write v cpy size: %d pts: %" PRId64 " dts: %" PRId64 " - %f to %f\n",
-					s->pkts[i].size, s->pkts[i].pts, s->pkts[i].dts, ts,
+					"write v cpy size: %d pts: %" PRId64 " dts: %" PRId64 " - frame pts %" PRId64 " - %f to %f\n",
+					s->pkts[i].size, s->pkts[i].pts, s->pkts[i].dts, frame->pts, ts,
 					s->pkts[i].pts * pr->out_fctx->streams[s->stream_index]->time_base.num /
 						(double)pr->out_fctx->streams[s->stream_index]->time_base.den
 					);
@@ -875,6 +875,10 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			av_frame_free(&s->frames[j]);
 	} else {
 		for (i=0;i<=last_pkt;i++) {
+			// TODO shouldn't we rescale the pkg from in- to out ctx?
+// 			av_packet_rescale_ts(&s->pkts[i], pr->in_fctx->streams[s->stream_index]->time_base,
+// 								 pr->out_fctx->streams[s->stream_index]->time_base);
+			
 			s->duration_dropped_pkts += s->pkts[i].duration;
 			av_packet_unref(&s->pkts[i]);
 		}
@@ -941,7 +945,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			}
 			
 			#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(56,56,0)
-			av_log(NULL, AV_LOG_DEBUG, "dec frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
+			av_log(NULL, AV_LOG_DEBUG, "dec frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c from %f\n",
 				  frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
 				  frame->pts*av_q2d(pr->in_fctx->streams[stream_index]->codec->time_base)
 				);
@@ -989,12 +993,12 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				)	;
 			}
 			
-			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
+			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c for %f\n",
 				frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
 				frame->pts*av_q2d(pr->in_codec_ctx[stream_index]->time_base)
 				);
 			#else
-			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " pkt_size: %d type: %c to %f\n",
+			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " pkt_size: %d type: %c for %f\n",
 				frame->pts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
 				frame->pts*av_q2d(pr->in_codec_ctx[stream_index]->time_base)
 				);
