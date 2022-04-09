@@ -471,30 +471,30 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 			return AVERROR_INVALIDDATA;
 		}
 		
+		ret = avcodec_get_context_defaults3(enc_cctx, encoder);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "Setting codec defaults failed\n");
+			avcodec_free_context(&dec_cctx);
+			avcodec_free_context(&enc_cctx);
+			return ret;
+		}
+		
+		enc_cctx->time_base = dec_cctx->time_base;
+		enc_cctx->ticks_per_frame = dec_cctx->ticks_per_frame;
+		enc_cctx->delay = dec_cctx->delay;
+		enc_cctx->width = dec_cctx->width;
+		enc_cctx->height = dec_cctx->height;
+		enc_cctx->pix_fmt = dec_cctx->pix_fmt;
+		enc_cctx->sample_aspect_ratio = dec_cctx->sample_aspect_ratio;
+		enc_cctx->color_primaries = dec_cctx->color_primaries;
+		enc_cctx->color_trc = dec_cctx->color_trc;
+		enc_cctx->colorspace = dec_cctx->colorspace;
+		enc_cctx->color_range = dec_cctx->color_range;
+		enc_cctx->chroma_sample_location = dec_cctx->chroma_sample_location;
+		enc_cctx->profile = dec_cctx->profile;
+		enc_cctx->level = dec_cctx->level;
+		
 		if (pr->profile) {
-			ret = avcodec_get_context_defaults3(enc_cctx, encoder);
-			if (ret < 0) {
-				av_log(NULL, AV_LOG_ERROR, "Setting codec defaults failed\n");
-				avcodec_free_context(&dec_cctx);
-				avcodec_free_context(&enc_cctx);
-				return ret;
-			}
-			
-			enc_cctx->time_base = dec_cctx->time_base;
-			enc_cctx->ticks_per_frame = dec_cctx->ticks_per_frame;
-			enc_cctx->delay = dec_cctx->delay;
-			enc_cctx->width = dec_cctx->width;
-			enc_cctx->height = dec_cctx->height;
-			enc_cctx->pix_fmt = dec_cctx->pix_fmt;
-			enc_cctx->sample_aspect_ratio = dec_cctx->sample_aspect_ratio;
-			enc_cctx->color_primaries = dec_cctx->color_primaries;
-			enc_cctx->color_trc = dec_cctx->color_trc;
-			enc_cctx->colorspace = dec_cctx->colorspace;
-			enc_cctx->color_range = dec_cctx->color_range;
-			enc_cctx->chroma_sample_location = dec_cctx->chroma_sample_location;
-			enc_cctx->profile = dec_cctx->profile;
-			enc_cctx->level = dec_cctx->level;
-			
 			av_log(NULL, AV_LOG_INFO, "Settings from profile:\n");
 			av_log(NULL, AV_LOG_INFO, "  Preset: %s\n", pr->profile->preset);
 			av_log(NULL, AV_LOG_INFO, "  Tune: %s\n", pr->profile->tune);
@@ -504,25 +504,6 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 			av_opt_set(enc_cctx->priv_data, "tune", pr->profile->tune, AV_OPT_SEARCH_CHILDREN);
 			av_opt_set(enc_cctx->priv_data, "x264opts", pr->profile->x264opts, AV_OPT_SEARCH_CHILDREN);
 		} else {
-			AVCodecParameters *params;
-			
-			params = avcodec_parameters_alloc();
-			
-			ret = avcodec_parameters_from_context(params, dec_cctx);
-			if (ret < 0) {
-				av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 1\n");
-				avcodec_free_context(&dec_cctx);
-				avcodec_free_context(&enc_cctx);
-				return ret;
-			}
-			ret = avcodec_parameters_to_context(enc_cctx, params);
-			if (ret < 0) {
-				av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters 2\n");
-				avcodec_free_context(&dec_cctx);
-				avcodec_free_context(&enc_cctx);
-				return ret;
-			}
-			
 			// TODO good values?
 			enc_cctx->qmin = 16;
 			enc_cctx->qmax = 26;
