@@ -150,16 +150,24 @@ void av_packet_rescale_ts(AVPacket *pkt, AVRational src_tb, AVRational dst_tb)
 // encode a frame and write the resulting packet into the output file
 int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *frame) {
 	AVPacket enc_pkt = { .data = NULL, .size = 0 };
+	AVPacket enc_pkt2;
 	int ret;
 	AVStream *ostream = pr->out_fctx->streams[s->stream_index];
 	AVCodecContext *codec_ctx = pr->out_codec_ctx[s->stream_index];
 	
 	
-	if (frame)
+	if (frame) {
 		av_log(NULL, AV_LOG_DEBUG, "enc frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
 			frame->pts, frame->best_effort_timestamp, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
 			frame->pts * av_q2d(codec_ctx->time_base)
 			);
+		
+		#ifndef USING_LIBAV
+		frame->pict_type = AV_PICTURE_TYPE_NONE;
+		#else
+		frame->pict_type = 0;
+		#endif
+	}
 	
 	ret = avcodec_send_frame(codec_ctx, frame);
 	if (ret < 0) {
@@ -198,27 +206,59 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 			if (ret) {
 				av_log(NULL, AV_LOG_ERROR, "error av_bsf_send_packet(): %d\n", ret);
 			}
-			ret = av_bsf_receive_packet(pr->bsf_dump_extra, &enc_pkt);
-			if (ret == EAGAIN)
-				av_log(NULL, AV_LOG_ERROR, "TODO flush av_bsf_send_packet(): %d\n", ret);
-			// break AVERROR_EOF
+			while (1) {
+				av_init_packet(&enc_pkt2);
+				
+				ret = av_bsf_receive_packet(pr->bsf_dump_extra, &enc_pkt2);
+				
+				if (ret == -EAGAIN) {
+					break;
+				}
+				if (ret == AVERROR_EOF)
+					break;
+				if (ret < 0) {
+					av_log(NULL, AV_LOG_ERROR, "av_bsf_receive_packet() failed: %s\n", av_err2str(ret));
+					exit(1);
+				}
+				
+				av_log(NULL, AV_LOG_DEBUG,
+					   "write video pkt (filtered), enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n",
+						enc_pkt2.size, enc_pkt2.pts, enc_pkt2.dts,
+						enc_pkt2.pts*ostream->time_base.num/(double)ostream->time_base.den);
+				
+				pr->video_packets_written++;
+				ret = av_interleaved_write_frame(pr->out_fctx, &enc_pkt2);
+				if (ret < 0) {
+					av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
+					return ret;
+				}
+				
+				av_frame_free(&frame);
+				// TODO av_frame_unref?
+				av_packet_unref(&enc_pkt);
+				av_packet_unref(&enc_pkt2);
+			}
+			if (ret == -EAGAIN) {
+				continue;
+			}
+		} else {
+		
+			av_log(NULL, AV_LOG_DEBUG,
+				"write video pkt, enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n",
+				enc_pkt.size, enc_pkt.pts, enc_pkt.dts,
+				enc_pkt.pts*ostream->time_base.num/(double)ostream->time_base.den);
+			
+			pr->video_packets_written++;
+			ret = av_interleaved_write_frame(pr->out_fctx, &enc_pkt);
+			if (ret < 0) {
+				av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
+				return ret;
+			}
+			
+			av_frame_free(&frame);
+			// TODO av_frame_unref?
+			av_packet_unref(&enc_pkt);
 		}
-		
-		av_log(NULL, AV_LOG_DEBUG,
-			"write video pkt, enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n",
-			enc_pkt.size, enc_pkt.pts, enc_pkt.dts,
-			enc_pkt.pts*ostream->time_base.num/(double)ostream->time_base.den);
-		
-		pr->video_packets_written++;
-		ret = av_interleaved_write_frame(pr->out_fctx, &enc_pkt);
-		if (ret < 0) {
-			av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
-			return ret;
-		}
-		
-		av_frame_free(&frame);
-		// TODO av_frame_unref?
-		av_packet_unref(&enc_pkt);
 	}
 	
 	return 0;
