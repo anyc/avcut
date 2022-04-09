@@ -522,12 +522,10 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 		
 		out_stream->sample_aspect_ratio = pr->in_fctx->streams[i]->sample_aspect_ratio;
 		
-		if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
-			enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-		
-		// TODO is this a good approach?
-		if (enc_cctx->time_base.num <= 0 || enc_cctx->time_base.den <= 0)
-			enc_cctx->time_base = out_stream->time_base;
+		// we do not want a global header
+		if (0)
+			if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
+				enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 		
 		ret = avcodec_open2(enc_cctx, encoder, NULL);
 		if (ret < 0) {
