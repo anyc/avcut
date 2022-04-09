@@ -717,12 +717,6 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->stop_reading_stream = 1;
 			
 			if (ts_included(pr, ts)) {
-				#ifndef USING_LIBAV
-				s->frames[i]->pict_type = AV_PICTURE_TYPE_NONE;
-				#else
-				s->frames[i]->pict_type = 0;
-				#endif
-				
 				ret = encode_write_frame(pr, s, s->frames[i]);
 				if (ret == -EAGAIN) {
 					// ignore, no complete pkt to write yet
