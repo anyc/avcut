@@ -1,0 +1,34 @@
+name: avcut CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install ffmpeg
+      run: |
+        sudo apt-get install -y libavcodec-dev libavformat-dev libavutil-dev
+    - name: set variables
+      run: |
+        echo "::set-output name=avcut_version::$(make version)"
+        echo "::set-output name=sha_short::$(git rev-parse --short HEAD)"
+        echo "::set-output name=debarch::$(dpkg --print-architecture)"
+      id: avcut_variables
+    - name: make
+      run: make
+    - name: make
+      run: |
+        mkdir destdir
+        make install DESTDIR=destdir
+    #- name: Store artifacts
+      #uses: actions/upload-artifact@v2
+      #with:
+        #name: avcut-${{ steps.avcut_variables.outputs.avcut_version }}.${{ steps.avcut_variables.outputs.sha_short }}-${{ steps.avcut_variables.outputs.debarch }}
+        #path: destdir

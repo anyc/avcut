@@ -1,0 +1,79 @@
+name: avcut CI tags
+
+on:
+  push:
+    tags:
+    - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install ffmpeg
+      run: |
+        sudo apt-get install -y libavcodec-dev libavformat-dev libavutil-dev
+        sudo apt-get install -y gcc-arm-linux-gnueabihf
+    - name: set variables
+      run: |
+        echo "::set-output name=avcut_version::$(make version)"
+        echo "::set-output name=sha_short::$(git rev-parse --short HEAD)"
+        echo "::set-output name=debarch::$(dpkg --print-architecture)"
+        echo "::set-output name=archive_file::avcut_$(make version)_$(dpkg --print-architecture).tgz"
+      id: avcut_variables
+    - name: make
+      run: make
+    - name: make
+      run: |
+        mkdir destdir
+        make install DESTDIR=destdir
+        tar -C destdir -czf ${{ steps.avcut_variables.outputs.archive_file }} .
+    - name: release
+      uses: actions/create-release@v1
+      id: create_release
+      with:
+        draft: false
+        prerelease: false
+        release_name: ${{ github.ref }}
+        tag_name: ${{ github.ref }}
+        #body_path: CHANGELOG.md
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: upload linux artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ${{ steps.avcut_variables.outputs.archive_file }}
+        asset_name: ${{ steps.avcut_variables.outputs.archive_file }}
+        asset_content_type: application/gzip
+    - uses: jiro4989/build-deb-action@v2
+      id: deb_stage
+      with:
+        package: 'avcut'
+        package_root: destdir
+        maintainer: 'avcut maintainer'
+        version: ${{ steps.avcut_variables.outputs.avcut_version }}
+        arch: ${{ steps.avcut_variables.outputs.debarch }}
+        depends: 'libavcodec, libavformat, libavutil'
+        desc: 'Frame-accurate video cutting with only small quality loss'
+    - name: upload deb artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ${{ steps.deb_stage.outputs.file_name }}
+        asset_name: ${{ steps.deb_stage.outputs.file_name }}
+        asset_content_type: application/vnd.debian.binary-package
+    - name: upload changelog artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./ChangeLog.txt
+        asset_name: ChangeLog.txt
+        asset_content_type: text/markdown
