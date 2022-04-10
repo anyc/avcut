@@ -164,11 +164,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 			);
 		
 		// we have to unset the pict_type as an encoder might react to it
-		#ifndef USING_LIBAV
 		frame->pict_type = AV_PICTURE_TYPE_NONE;
-		#else
-		frame->pict_type = 0;
-		#endif
 	}
 	
 	// we send no or one frame to the library and receive zero or more frames in return below
@@ -355,7 +351,6 @@ char find_packet_for_frame(struct project *pr, struct packet_buffer *s, size_t f
 				s->frames[frame_idx]->pkt_size == s->pkts[i].size - pr->size_diff)
 		)
 		{
-			#ifndef USING_LIBAV
 			// libav is missing pkt_size
 			if (s->frames[frame_idx]->pkt_size != s->pkts[i].size - pr->size_diff) {
 				av_log(NULL, AV_LOG_ERROR,
@@ -365,7 +360,6 @@ char find_packet_for_frame(struct project *pr, struct packet_buffer *s, size_t f
 						s->pkts[i].size - s->frames[frame_idx]->pkt_size);
 				continue;
 			}
-			#endif
 			
 			*packet_idx = i;
 			
@@ -724,13 +718,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					break;
 				}
 				if (ret < 0) {
-					#ifndef USING_LIBAV
 					av_log(NULL, AV_LOG_ERROR, "encode_write_frame failed, error %d: %s\n", ret, av_err2str(ret));
-					#else
-					char errbuf[256];
-					av_strerror(ret, errbuf, 256);
-					av_log(NULL, AV_LOG_ERROR, "encode_write_frame failed, error %d: %s\n", ret, errbuf);
-					#endif
 					exit(ret);
 				}
 			}
@@ -771,7 +759,6 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 						s->frames[j]->pkt_size == s->pkts[i].size - pr->size_diff)
 					)
 				{
-					#ifndef USING_LIBAV
 					// libav is missing pkt_size
 					if (s->frames[j]->pkt_size != s->pkts[i].size - pr->size_diff) {
 						av_log(NULL, AV_LOG_ERROR,
@@ -779,7 +766,6 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 							j, s->frames[j]->pkt_size, i, s->pkts[i].size,  - pr->size_diff, s->pkts[i].dts);
 						continue;
 					}
-					#endif
 					
 					frame = s->frames[j];
 					break;
@@ -980,15 +966,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			
 			pr->video_packets_decoded++;
 			
-			#ifndef USING_LIBAV
 			frame->pts = frame->best_effort_timestamp;
-			#else
-			if (frame->best_effort_timestamp != AV_NOPTS_VALUE) {
-				frame->pts = frame->best_effort_timestamp;
-			} else {
-				frame->pts = frame->pkt_dts;
-			}
-			#endif
 			
 			// if pts is set from pkt_dts (e.g., through ->best_effort_timestamp),
 			// convert from packet (/stream) to frame (/codec) time_base
@@ -1411,25 +1389,11 @@ int main(int argc, char **argv) {
 		}
 	}
 	
-	#ifndef USING_LIBAV
 	avformat_alloc_output_context2(&pr->out_fctx, NULL, NULL, outputf);
-	#else
-	pr->out_fctx = avformat_alloc_context();
-	#endif
 	if (!pr->out_fctx) {
 		av_log(NULL, AV_LOG_ERROR, "Could not create output context\n");
 		return AVERROR_UNKNOWN;
 	}
-	
-	#ifdef USING_LIBAV
-	av_strlcpy(pr->out_fctx->filename, outputf, sizeof(pr->out_fctx->filename));
-	pr->out_fctx->oformat = av_guess_format(NULL, outputf, NULL);
-	if (!pr->out_fctx->oformat) {
-		avformat_free_context(pr->out_fctx);
-		av_log(NULL, AV_LOG_ERROR, "Could not determine output format\n");
-		return AVERROR_UNKNOWN;
-	}
-	#endif
 	
 	pr->out_codec_ctx = (AVCodecContext**) calloc(1, sizeof(AVCodecContext*) * pr->n_stream_ids);
 	
