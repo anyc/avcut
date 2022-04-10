@@ -150,8 +150,8 @@ void av_packet_rescale_ts(AVPacket *pkt, AVRational src_tb, AVRational dst_tb)
 
 // encode a frame and write the resulting packet into the output file
 int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *frame) {
-	AVPacket enc_pkt = { .data = NULL, .size = 0 };
-	AVPacket enc_pkt2;
+	AVPacket *enc_pkt;
+	AVPacket *enc_pkt2;
 	int ret;
 	AVStream *ostream = pr->out_fctx->streams[s->stream_index];
 	AVCodecContext *codec_ctx = pr->out_codec_ctx[s->stream_index];
@@ -175,9 +175,13 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 	}
 	
 	while (1) {
-		av_init_packet(&enc_pkt);
+		enc_pkt = av_packet_alloc();
+		if (!enc_pkt) {
+			av_log(NULL, AV_LOG_ERROR, "av_packet_alloc() failed\n");
+			return ret;
+		}
 		
-		ret = avcodec_receive_packet(codec_ctx, &enc_pkt);
+		ret = avcodec_receive_packet(codec_ctx, enc_pkt);
 		if (ret == -EAGAIN || ret == AVERROR_EOF) {
 			return ret;
 		}
@@ -189,26 +193,30 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		
 		pr->video_frames_encoded++;
 		
-		enc_pkt.stream_index = s->stream_index;
+		enc_pkt->stream_index = s->stream_index;
 		
-		if (enc_pkt.duration == 0) {
-			enc_pkt.duration = codec_ctx->ticks_per_frame;
-			av_packet_rescale_ts(&enc_pkt, codec_ctx->time_base, ostream->time_base);
+		if (enc_pkt->duration == 0) {
+			enc_pkt->duration = codec_ctx->ticks_per_frame;
+			av_packet_rescale_ts(enc_pkt, codec_ctx->time_base, ostream->time_base);
 		}
 		
-		enc_pkt.dts = s->next_dts;
-		s->next_dts += enc_pkt.duration;
+		enc_pkt->dts = s->next_dts;
+		s->next_dts += enc_pkt->duration;
 		
 		// copy the header to the beginning of each key frame if we use a global header
 		if (codec_ctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER) {
-			ret = av_bsf_send_packet(pr->bsf_dump_extra, &enc_pkt);
+			ret = av_bsf_send_packet(pr->bsf_dump_extra, enc_pkt);
 			if (ret) {
 				av_log(NULL, AV_LOG_ERROR, "error av_bsf_send_packet(): %d\n", ret);
 			}
 			while (1) {
-				av_init_packet(&enc_pkt2);
+				enc_pkt2 = av_packet_alloc();
+				if (!enc_pkt2) {
+					av_log(NULL, AV_LOG_ERROR, "av_packet_alloc() failed\n");
+					return ret;
+				}
 				
-				ret = av_bsf_receive_packet(pr->bsf_dump_extra, &enc_pkt2);
+				ret = av_bsf_receive_packet(pr->bsf_dump_extra, enc_pkt2);
 				
 				if (ret == -EAGAIN) {
 					break;
@@ -222,11 +230,11 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 				
 				av_log(NULL, AV_LOG_DEBUG,
 					   "write video pkt (filtered), enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n",
-						enc_pkt2.size, enc_pkt2.pts, enc_pkt2.dts,
-						enc_pkt2.pts*ostream->time_base.num/(double)ostream->time_base.den);
+						enc_pkt2->size, enc_pkt2->pts, enc_pkt2->dts,
+						enc_pkt2->pts*ostream->time_base.num/(double)ostream->time_base.den);
 				
 				pr->video_packets_written++;
-				ret = av_interleaved_write_frame(pr->out_fctx, &enc_pkt2);
+				ret = av_interleaved_write_frame(pr->out_fctx, enc_pkt2);
 				if (ret < 0) {
 					av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
 					return ret;
@@ -234,8 +242,8 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 				
 				av_frame_free(&frame);
 				// TODO av_frame_unref?
-				av_packet_unref(&enc_pkt);
-				av_packet_unref(&enc_pkt2);
+				av_packet_free(&enc_pkt);
+				av_packet_free(&enc_pkt2);
 			}
 			if (ret == -EAGAIN) {
 				continue;
@@ -243,11 +251,11 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		} else {
 			av_log(NULL, AV_LOG_DEBUG,
 				"write video pkt, enc size: %d pts: %" PRId64 " dts: %" PRId64 " - to %f\n",
-				enc_pkt.size, enc_pkt.pts, enc_pkt.dts,
-				enc_pkt.pts*ostream->time_base.num/(double)ostream->time_base.den);
+				enc_pkt->size, enc_pkt->pts, enc_pkt->dts,
+				enc_pkt->pts*ostream->time_base.num/(double)ostream->time_base.den);
 			
 			pr->video_packets_written++;
-			ret = av_interleaved_write_frame(pr->out_fctx, &enc_pkt);
+			ret = av_interleaved_write_frame(pr->out_fctx, enc_pkt);
 			if (ret < 0) {
 				av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
 				return ret;
@@ -255,7 +263,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 			
 			av_frame_free(&frame);
 			// TODO av_frame_unref?
-			av_packet_unref(&enc_pkt);
+			av_packet_free(&enc_pkt);
 		}
 	}
 	
@@ -802,7 +810,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->stop_reading_stream = 1;
 			
 			if (ts_included(pr, ts)) {
-				AVPacket pkt;
+				AVPacket *pkt;
 				
 				
 				// rescale the frame PTS to packet PTS
@@ -830,9 +838,13 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					}
 					
 					while (1) {
-						av_init_packet(&pkt);
+						pkt = av_packet_alloc();
+						if (!pkt) {
+							av_log(NULL, AV_LOG_ERROR, "av_packet_alloc() failed\n");
+							exit(1);
+						}
 						
-						ret = av_bsf_receive_packet(pr->bsf_h264_to_annexb, &pkt);
+						ret = av_bsf_receive_packet(pr->bsf_h264_to_annexb, pkt);
 						
 						if (ret == -EAGAIN) {
 							break;
@@ -846,8 +858,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 						
 						av_log(NULL, AV_LOG_DEBUG,
 							"write v cpy pkt_size: %d pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " - frame pts %" PRId64 " - %f to %f\n",
-								pkt.size, pkt.pts, pkt.dts, frame->pts, ts,
-								pkt.pts * pr->out_fctx->streams[s->stream_index]->time_base.num /
+								pkt->size, pkt->pts, pkt->dts, frame->pts, ts,
+								pkt->pts * pr->out_fctx->streams[s->stream_index]->time_base.num /
 								(double)pr->out_fctx->streams[s->stream_index]->time_base.den
 							);
 						
@@ -857,7 +869,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 							av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
 							exit(ret);
 						}
-						av_packet_unref(&pkt);
+						av_packet_free(&pkt);
 					}
 					if (ret == -EAGAIN) {
 						continue;
