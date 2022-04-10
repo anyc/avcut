@@ -191,10 +191,11 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		pr->video_frames_encoded++;
 		
 		enc_pkt.stream_index = s->stream_index;
-		if (enc_pkt.duration == 0)
-			enc_pkt.duration = codec_ctx->ticks_per_frame;
 		
-		av_packet_rescale_ts(&enc_pkt, codec_ctx->time_base, ostream->time_base);
+		if (enc_pkt.duration == 0) {
+			enc_pkt.duration = codec_ctx->ticks_per_frame;
+			av_packet_rescale_ts(&enc_pkt, codec_ctx->time_base, ostream->time_base);
+		}
 		
 		enc_pkt.dts = s->next_dts;
 		s->next_dts += enc_pkt.duration;
