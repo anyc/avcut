@@ -827,27 +827,23 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 // 				continue;
 			}
 			
-			s->pkts[i].pts = av_rescale_q(frame->pts,
-					pr->in_codec_ctx[s->stream_index]->time_base,
-					pr->in_fctx->streams[s->stream_index]->time_base);
-			
 			ts = frame_pts2ts(pr, s, frame);
 			
 			if (pr->stop_after_ts < ts)
 				s->stop_reading_stream = 1;
 			
 			if (ts_included(pr, ts)) {
-				s->pkts[i].pts -= s->duration_dropped_pkts;
+				s->pkts[i].pts = av_rescale_q(frame->pts,
+						pr->in_codec_ctx[s->stream_index]->time_base,
+						pr->in_fctx->streams[s->stream_index]->time_base);
 				
-				// calculate duration precisely to avoid deviation between PTS and DTS
-				double dur = s->pkts[i].duration * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base) /
-					av_q2d( pr->out_fctx->streams[s->stream_index]->time_base);
+				s->pkts[i].pts -= s->duration_dropped_pkts;
 				
 				av_packet_rescale_ts(&s->pkts[i], pr->in_fctx->streams[s->stream_index]->time_base,
 								 pr->out_fctx->streams[s->stream_index]->time_base);
 				
 				s->pkts[i].dts = s->next_dts;
-				s->next_dts += dur;
+				s->next_dts += s->pkts[i].duration;
 				
 				// if the original h264 stream is in AVCC format, convert it to Annex B
 				if (pr->in_codec_ctx[s->stream_index]->opaque &&
