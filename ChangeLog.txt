@@ -1,3 +1,18 @@
+v0.5 (2022-04-10)
+=================
+ It has been a long time since the last release as I have no need for a video
+ cutter anymore and my spare time has become quite limited. As I saw this tool
+ is still of interest for people, I decided to invest some time again to at
+ least keep it usable with newer ffmpeg versions. The necessary changes required
+ a little bit more effort than I thought but I managed to get it working again
+ and I fixed some bugs on the road, too. However, due to the amount of changes,
+ I would not guarantee that there are less bugs in the code now than before. So
+ please take extra care when checking the resulting videos.
+
+ * Fixed all deprecation warnings present with ffmpeg 4.3.2 (Ubuntu 21.04)
+ * Fixed some bugs
+ * Removed libav compatibility code
+
 v0.4
 ====
  * progress information (Christoph Läubrich)

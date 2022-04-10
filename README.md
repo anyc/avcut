@@ -25,17 +25,10 @@ Dependencies
 
 * [ffmpeg](https://www.ffmpeg.org/)
 
-avcut also compiles with [libav](https://libav.org/) if you enable the flag in
-the Makefile but it has not been tested much.
-
 Compilation
 -----------
 
 Install dependencies:
-
-* For Ubuntu versions with libav as default, e.g., 15.04:
-
-  * `apt-get install libavcodec-ffmpeg-dev libavformat-ffmpeg-dev libavutil-ffmpeg-dev`
 
 * For Ubuntu with ffmpeg:
 
