@@ -5,8 +5,8 @@ APP=avcut
 AVCUT_VERSION=0.4
 
 ifneq ($(CROSS_COMPILE),)
-	CC=$(CROSS_COMPILE)gcc
-	LD=$(CROSS_CoMPILE)ld
+	CC?=$(CROSS_COMPILE)gcc
+	LD?=$(CROSS_COMPILE)ld
 	PKG_CONFIG?=$(CROSS_COMPILE)pkg-config
 else
 	PKG_CONFIG?=pkg-config
@@ -15,9 +15,6 @@ endif
 CFLAGS+=-Wall -DAVCUT_VERSION=\"$(AVCUT_VERSION)\"
 CFLAGS+=$(shell for x in libavcodec libavformat libavutil; do $(PKG_CONFIG) --cflags $(PC_FLAGS) "$$x"; done)
 LDLIBS+=$(shell for x in libavcodec libavformat libavutil; do $(PKG_CONFIG) --libs $(PC_FLAGS) "$$x"; done)
-
-### enable support for libav (EXPERIMENTAL)
-# CFLAGS+=-DUSING_LIBAV
 
 AVCUT_PROFILE_DIRECTORY?=$(PREFIX)/share/avcut/profiles/
 
