@@ -816,6 +816,9 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->stop_reading_stream = 1;
 			
 			if (ts_included(pr, ts)) {
+				AVPacket pkt;
+				
+				
 				// rescale the frame PTS to packet PTS
 				s->pkts[i].pts = av_rescale_q(frame->pts,
 						pr->in_codec_ctx[s->stream_index]->time_base,
@@ -835,15 +838,44 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				if (pr->in_codec_ctx[s->stream_index]->opaque &&
 					((struct codeccontext*) pr->in_codec_ctx[s->stream_index]->opaque)->h264_avcc_format)
 				{
-					// TODO properly flush filter
 					ret = av_bsf_send_packet(pr->bsf_h264_to_annexb, &s->pkts[i]);
 					if (ret) {
-						av_log(NULL, AV_LOG_ERROR, "error av_bsf_send_packet(): %d\n", ret);
+						av_log(NULL, AV_LOG_ERROR, "error av_bsf_send_packet(bsf_h264_to_annexb): %d\n", ret);
 					}
-					ret = av_bsf_receive_packet(pr->bsf_h264_to_annexb, &s->pkts[i]);
-					if (ret == EAGAIN)
-						av_log(NULL, AV_LOG_ERROR, "TODO flush av_bsf_send_packet(): %d\n", ret);
-					// break AVERROR_EOF
+					
+					while (1) {
+						av_init_packet(&pkt);
+						
+						ret = av_bsf_receive_packet(pr->bsf_h264_to_annexb, &pkt);
+						
+						if (ret == -EAGAIN) {
+							break;
+						}
+						if (ret == AVERROR_EOF)
+							break;
+						if (ret < 0) {
+							av_log(NULL, AV_LOG_ERROR, "av_bsf_receive_packet(bsf_h264_to_annexb) failed: %s\n", av_err2str(ret));
+							exit(1);
+						}
+						
+						av_log(NULL, AV_LOG_DEBUG,
+							"write v cpy pkt_size: %d pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " - frame pts %" PRId64 " - %f to %f\n",
+								pkt.size, pkt.pts, pkt.dts, frame->pts, ts,
+								pkt.pts * pr->out_fctx->streams[s->stream_index]->time_base.num /
+								(double)pr->out_fctx->streams[s->stream_index]->time_base.den
+							);
+						
+						pr->video_packets_written++;
+						ret = av_interleaved_write_frame(pr->out_fctx, &s->pkts[i]);
+						if (ret < 0) {
+							av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
+							exit(ret);
+						}
+						av_packet_unref(&pkt);
+					}
+					if (ret == -EAGAIN) {
+						continue;
+					}
 				}
 				
 				av_log(NULL, AV_LOG_DEBUG,
