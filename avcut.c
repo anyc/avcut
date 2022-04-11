@@ -739,6 +739,9 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			
 			// if the encoder does not support a restart after a flush, we have
 			// to close and reopen the encoder
+			#ifndef AV_CODEC_CAP_ENCODER_FLUSH
+			#define AV_CODEC_CAP_ENCODER_FLUSH 0
+			#endif
 			if (out_cctx->codec->capabilities & AV_CODEC_CAP_ENCODER_FLUSH) {
 				avcodec_flush_buffers(out_cctx);
 			} else {
