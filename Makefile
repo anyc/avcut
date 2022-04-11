@@ -39,7 +39,7 @@ install: $(APP)
 	mkdir -p "$(DESTDIR)$(PREFIX)/bin"
 	install -m 755 avcut "$(DESTDIR)$(PREFIX)/bin/"
 	mkdir -p "$(DESTDIR)$(PREFIX)/share/doc/$(APP)/"
-	install -m 644 README.md "$(DESTDIR)$(PREFIX)/share/doc/$(APP)/"
+	install -m 644 README.md ChangeLog.txt "$(DESTDIR)$(PREFIX)/share/doc/$(APP)/"
 	
 	mkdir -p $(DESTDIR)$(AVCUT_PROFILE_DIRECTORY)
 	cp profiles/* $(DESTDIR)$(AVCUT_PROFILE_DIRECTORY)
