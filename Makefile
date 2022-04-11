@@ -55,3 +55,6 @@ debug: all
 static: CFLAGS+=-static
 static: PC_FLAGS=--static
 static: all
+
+version:
+	@echo $(AVCUT_VERSION)
