@@ -1,3 +1,9 @@
+v0.6 (2022-04-11)
+=================
+ * replaced deprecated av_init_packet()
+ * define AV_CODEC_CAP_ENCODER_FLUSH in older ffmpeg versions
+ * Automatic release builds (tgz & deb) using Github Actions
+
 v0.5 (2022-04-10)
 =================
  It has been a long time since the last release as I have no need for a video
