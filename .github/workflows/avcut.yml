@@ -14,6 +14,10 @@ jobs:
     - uses: actions/checkout@v3
     - name: Install ffmpeg
       run: |
+        sudo apt-get install mingw-w64
+        sudo apt-get install mingw-w64-tools
+        sudo apt-get install mingw-w64-i686-dev
+        sudo apt-get install mingw-w64-x86-64-dev
         sudo apt-get install -y libavcodec-dev libavformat-dev libavutil-dev
     - name: set variables
       run: |
@@ -26,7 +30,7 @@ jobs:
     - name: make
       run: |
         mkdir destdir
-        make install DESTDIR=destdir
+        x86_64-w64-mingw32-gcc -o avcut.exe avcut.c
     #- name: Store artifacts
       #uses: actions/upload-artifact@v2
       #with:
