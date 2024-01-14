@@ -354,8 +354,6 @@ char find_packet_for_frame(struct project *pr, struct packet_buffer *s, size_t f
 		if (
 			(s->pkts[i].pts != AV_NOPTS_VALUE &&
 				s->pkts[i].pts == s->frames[frame_idx]->best_effort_timestamp) ||
-			(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts != AV_NOPTS_VALUE &&
-				s->pkts[i].dts == s->frames[frame_idx]->coded_picture_number) ||
 			(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == AV_NOPTS_VALUE &&
 				s->frames[frame_idx]->pkt_size == s->pkts[i].size - pr->size_diff)
 		)
@@ -376,16 +374,14 @@ char find_packet_for_frame(struct project *pr, struct packet_buffer *s, size_t f
 		}
 	}
 	
-	av_log(NULL, AV_LOG_ERROR, "packet for frame %zu (cpn %d dpn %d) not found\n",
-			frame_idx, s->frames[frame_idx]->coded_picture_number,
-			s->frames[frame_idx]->display_picture_number);
+	av_log(NULL, AV_LOG_ERROR, "packet for frame %zu not found\n",
+			frame_idx);
 	
 	for (i=0;i<s->n_pkts;i++) {
-		av_log(NULL, AV_LOG_DEBUG, "%" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " - %d %d - %d (NOPTS: %" PRId64 ")\n",
+		av_log(NULL, AV_LOG_DEBUG, "%" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " - %d %d (NOPTS: %" PRId64 ")\n",
 				s->pkts[i].pts, s->pkts[i].dts, s->frames[frame_idx]->pkt_dts,
 				s->frames[frame_idx]->best_effort_timestamp,
 				s->frames[frame_idx]->pkt_size, s->pkts[i].size,
-				s->frames[frame_idx]->coded_picture_number,
 				AV_NOPTS_VALUE);
 	}
 	
@@ -765,8 +761,6 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				if (
 					(s->pkts[i].pts != AV_NOPTS_VALUE &&
 						s->pkts[i].pts == s->frames[j]->best_effort_timestamp) ||
-					(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts != AV_NOPTS_VALUE &&
-						s->pkts[i].dts == s->frames[j]->coded_picture_number) ||
 					(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == AV_NOPTS_VALUE &&
 						s->frames[j]->pkt_size == s->pkts[i].size - pr->size_diff)
 					)
@@ -790,12 +784,11 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				
 				av_log(NULL, AV_LOG_DEBUG, "pkt_pts pkt_dts frame->pkt_dts frame->pts frame->best_eff - frame->pkt_size pkt_size - cpn\n");
 				for (j=0;j<s->n_frames;j++) {
-					av_log(NULL, AV_LOG_DEBUG, "%" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " - %6d %6d - %d type: %c (NOPTS: %" PRId64 ")\n",
+					av_log(NULL, AV_LOG_DEBUG, "%" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " - %6d %6d - type: %c (NOPTS: %" PRId64 ")\n",
 						s->pkts[i].pts, s->pkts[i].dts, s->frames[j]->pkt_dts,
 						s->frames[j]->pts,
 						s->frames[j]->best_effort_timestamp,
 						s->frames[j]->pkt_size, s->pkts[i].size,
-						s->frames[j]->coded_picture_number,
 						av_get_picture_type_char(s->frames[j]->pict_type),
 						AV_NOPTS_VALUE);
 				}
