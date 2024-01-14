@@ -1116,7 +1116,8 @@ void help() {
 	av_log(NULL, AV_LOG_INFO, "                  is loaded from the default profile directory:\n");
 	av_log(NULL, AV_LOG_INFO, "                    %s\n", AVCUT_PROFILE_DIRECTORY);
 	av_log(NULL, AV_LOG_INFO, "  -s <index>      Skip stream with this index\n");
-	av_log(NULL, AV_LOG_INFO, "  -v <level>      Set verbosity level (see https://www.ffmpeg.org/doxygen/2.8/log_8h.html)\n");
+	av_log(NULL, AV_LOG_INFO, "  -v <level>      Set verbosity level, e.g., 48 for AV_LOG_DEBUG, more:\n");
+	av_log(NULL, AV_LOG_INFO, "                  https://www.ffmpeg.org/doxygen/2.8/log_8h.html\n");
 	av_log(NULL, AV_LOG_INFO, "\n");
 	av_log(NULL, AV_LOG_INFO, "Besides the input and output file, avcut expects a \"blacklist\", i.e. what should\n");
 	av_log(NULL, AV_LOG_INFO, "be dropped, as argument. This blacklist consists of timestamps that denote from\n");
