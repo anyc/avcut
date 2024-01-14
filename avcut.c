@@ -75,7 +75,7 @@ struct packet_buffer {
 	
 	size_t length; // allocated array length of .pkts and .frames
 	
-	unsigned long duration_dropped_pkts; // accumulated duration of dropped packets
+	unsigned long duration_dropped_in_pkts; // accumulated duration of dropped packets
 	
 	double next_dts; // DTS of the next packet that will be written
 	long last_pts; // store last PTS in case we're dealing with AVIs where the
@@ -570,7 +570,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					( (buffer_mode & BUF_COPY_COMPLETE) || ts_included(pr, ts) )
 				)
 			{
-				s->pkts[i].pts -= s->duration_dropped_pkts;
+				s->pkts[i].pts -= s->duration_dropped_in_pkts;
 				
 				// calculate duration precisely to avoid deviation between PTS and DTS
 				double dur = s->pkts[i].duration * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base) /
@@ -595,7 +595,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					exit(ret);
 				}
 			} else {
-				s->duration_dropped_pkts += s->pkts[i].duration;
+				s->duration_dropped_in_pkts += s->pkts[i].duration;
 			}
 			
 			av_packet_unref(&s->pkts[i]);
@@ -682,7 +682,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			// calculate the output PTS from the input PTS by substracting the
 			// number of dropped frames which we calculate by rescaling from
 			// the number of dropped packets (stream- to codec timebase)
-			s->frames[i]->pts -= av_rescale_q(s->duration_dropped_pkts,
+			s->frames[i]->pts -= av_rescale_q(s->duration_dropped_in_pkts,
 						pr->in_fctx->streams[s->stream_index]->time_base,
 						pr->in_codec_ctx[s->stream_index]->time_base);
 			
@@ -702,9 +702,11 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				frame_written = 1;
 			} else {
 				#if (LIBAVUTIL_VERSION_MAJOR >= 59)
-				s->duration_dropped_pkts += s->frames[i]->duration;
+				s->duration_dropped_in_pkts += av_rescale_q(s->frames[i]->duration,
+						pr->in_codec_ctx[s->stream_index]->time_base,
+						pr->in_fctx->streams[s->stream_index]->time_base);
 				#else
-				s->duration_dropped_pkts += s->frames[i]->pkt_duration;
+				s->duration_dropped_in_pkts += s->frames[i]->pkt_duration;
 				#endif
 				av_frame_free(&s->frames[i]);
 			}
@@ -813,7 +815,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 						pr->in_fctx->streams[s->stream_index]->time_base);
 				
 				// now we can just substract the number of dropped packets
-				s->pkts[i].pts -= s->duration_dropped_pkts;
+				s->pkts[i].pts -= s->duration_dropped_in_pkts;
 				
 				// switch from input timebase to output timebase
 				av_packet_rescale_ts(&s->pkts[i], pr->in_fctx->streams[s->stream_index]->time_base,
@@ -884,7 +886,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					exit(ret);
 				}
 			} else {
-				s->duration_dropped_pkts += s->pkts[i].duration;
+				s->duration_dropped_in_pkts += s->pkts[i].duration;
 			}
 			
 			av_packet_unref(&s->pkts[i]);
@@ -894,7 +896,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			av_frame_free(&s->frames[j]);
 	} else {
 		for (i=0;i<=last_pkt;i++) {
-			s->duration_dropped_pkts += s->pkts[i].duration;
+			s->duration_dropped_in_pkts += s->pkts[i].duration;
 			av_packet_unref(&s->pkts[i]);
 		}
 		
