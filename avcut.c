@@ -393,6 +393,7 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 	int ret;
 	AVStream *out_stream;
 	AVCodecContext *dec_cctx, *enc_cctx;
+	const AVCodec *encoder;
 	
 	
 	i = pr->stream_ids[enc_stream_idx];
@@ -416,7 +417,17 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 	// copy stream metadata
 	av_dict_copy(&out_stream->metadata, pr->in_fctx->streams[i]->metadata, 0);
 	
-	enc_cctx = avcodec_alloc_context3(NULL);
+	if (dec_cctx->codec_type == AVMEDIA_TYPE_VIDEO) {
+		encoder = avcodec_find_encoder(dec_cctx->codec_id);
+		if (!encoder) {
+			av_log(NULL, AV_LOG_ERROR, "Encoder not found\n");
+			return AVERROR_INVALIDDATA;
+		}
+	} else {
+		encoder = NULL;
+	}
+	
+	enc_cctx = avcodec_alloc_context3(encoder);
 	if (!enc_cctx) {
 		av_log(NULL, AV_LOG_ERROR, "Failed to alloc video decoder context\n");
 		return AVERROR_UNKNOWN;
@@ -437,24 +448,6 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 	pr->out_codec_ctx[enc_stream_idx] = enc_cctx;
 	
 	if (dec_cctx->codec_type == AVMEDIA_TYPE_VIDEO) {
-		AVCodec *encoder;
-		
-		encoder = avcodec_find_encoder(enc_cctx->codec_id);
-		if (!encoder) {
-			av_log(NULL, AV_LOG_ERROR, "Encoder not found\n");
-			avcodec_free_context(&dec_cctx);
-			avcodec_free_context(&enc_cctx);
-			return AVERROR_INVALIDDATA;
-		}
-		
-		ret = avcodec_get_context_defaults3(enc_cctx, encoder);
-		if (ret < 0) {
-			av_log(NULL, AV_LOG_ERROR, "Setting codec defaults failed\n");
-			avcodec_free_context(&dec_cctx);
-			avcodec_free_context(&enc_cctx);
-			return ret;
-		}
-		
 		enc_cctx->time_base = dec_cctx->time_base;
 		enc_cctx->ticks_per_frame = dec_cctx->ticks_per_frame;
 		enc_cctx->delay = dec_cctx->delay;
