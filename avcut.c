@@ -37,6 +37,7 @@
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <libavcodec/bsf.h>
 #include <libavutil/opt.h>
 
 #define AVCUT_DUMP_CHAR(var, length) { size_t i; for (i=0; i<(length); i++) { printf("%x ", ((char*) (var))[i]); } printf("\n"); }
@@ -117,8 +118,8 @@ struct project {
 	size_t video_packets_written;
 	size_t other_packets_written;
 	
-	AVBSFContext *bsf_h264_to_annexb;
-	AVBSFContext *bsf_dump_extra;
+	struct AVBSFContext *bsf_h264_to_annexb;
+	struct AVBSFContext *bsf_dump_extra;
 };
 
 // private data avcut may store with each AVCodecContext
