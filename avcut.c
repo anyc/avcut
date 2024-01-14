@@ -1299,7 +1299,7 @@ int main(int argc, char **argv) {
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
 		AVCodecContext *codec_ctx;
 		AVCodecParameters *par;
-		AVCodec *codec;
+		const AVCodec *codec;
 		char skip;
 		
 		skip = 0;
