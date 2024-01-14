@@ -701,7 +701,11 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				
 				frame_written = 1;
 			} else {
+				#if (LIBAVUTIL_VERSION_MAJOR >= 59)
+				s->duration_dropped_pkts += s->frames[i]->duration;
+				#else
 				s->duration_dropped_pkts += s->frames[i]->pkt_duration;
+				#endif
 				av_frame_free(&s->frames[i]);
 			}
 		}
@@ -982,7 +986,11 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			// override the PTS (copied from DTS) in such a case to provide
 			// an increasing PTS
 			if (frame->pts < sbuffer->last_pts) {
+				#if (LIBAVUTIL_VERSION_MAJOR >= 59)
+				int64_t new_pts = sbuffer->last_pts + av_rescale_q(frame->duration,
+				#else
 				int64_t new_pts = sbuffer->last_pts + av_rescale_q(frame->pkt_duration,
+				#endif
 					pr->in_fctx->streams[stream_index]->time_base,
 					pr->in_codec_ctx[stream_index]->time_base);
 				av_log(NULL, AV_LOG_DEBUG, "adjusting frame PTS from %" PRId64 " to %" PRId64 "\n", frame->pts, new_pts);
