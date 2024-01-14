@@ -860,7 +860,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 							);
 						
 						pr->video_packets_written++;
-						ret = av_interleaved_write_frame(pr->out_fctx, &s->pkts[i]);
+						ret = av_interleaved_write_frame(pr->out_fctx, pkt);
 						if (ret < 0) {
 							av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
 							exit(ret);
