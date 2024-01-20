@@ -95,6 +95,7 @@ struct project {
 	char has_b_frames;
 	
 	struct profile *profile;
+	const char *video_encoder;
 	
 	unsigned int n_stream_ids; // number of streams in output file
 	unsigned int *stream_ids; // mapping of output stream to input stream
@@ -418,9 +419,21 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 	av_dict_copy(&out_stream->metadata, pr->in_fctx->streams[i]->metadata, 0);
 	
 	if (dec_cctx->codec_type == AVMEDIA_TYPE_VIDEO) {
-		encoder = avcodec_find_encoder(dec_cctx->codec_id);
+		if (!pr->video_encoder) {
+			encoder = avcodec_find_encoder(dec_cctx->codec_id);
+		} else {
+			encoder = avcodec_find_encoder_by_name(pr->video_encoder);
+			if (!encoder) {
+				const AVCodecDescriptor *desc;
+				
+				desc = avcodec_descriptor_get_by_name(pr->video_encoder);
+				if (desc)
+					encoder = avcodec_find_encoder(desc->id);
+			}
+		}
+		
 		if (!encoder) {
-			av_log(NULL, AV_LOG_ERROR, "Encoder not found\n");
+			av_log(NULL, AV_LOG_ERROR, "Encoder not found (%s)\n", pr->video_encoder?pr->video_encoder:"");
 			return AVERROR_INVALIDDATA;
 		}
 	} else {
@@ -1108,6 +1121,7 @@ void help() {
 	av_log(NULL, AV_LOG_INFO, "\n");
 	av_log(NULL, AV_LOG_INFO, "  -c              Create a shell script to check the cutpoints with mpv\n");
 	av_log(NULL, AV_LOG_INFO, "  -d <diff>       Accept this difference in packet sizes during packet matching\n");
+	av_log(NULL, AV_LOG_INFO, "  -e <encoder>    select video encoder by name manually\n");
 	av_log(NULL, AV_LOG_INFO, "  -f <framecount> provide the approximate total frame count to show progress information\n");
 	av_log(NULL, AV_LOG_INFO, "  -i <file>       Input file\n");
 	av_log(NULL, AV_LOG_INFO, "  -o <file>       Output file\n");
@@ -1136,7 +1150,7 @@ int main(int argc, char **argv) {
 	unsigned int *skip_streams;
 	unsigned long size_diff;
 	int ret, opt, create_check_script;
-	char *inputf, *outputf, *profile;
+	char *inputf, *outputf, *profile, *video_encoder;
 #ifndef DEBUG
 	char *verbosity_level;
 #endif
@@ -1152,9 +1166,10 @@ int main(int argc, char **argv) {
 	inputf = 0;
 	outputf = 0;
 	profile = 0;
+	video_encoder = 0;
 	size_diff = 0;
 	max_framecount=0;
-	while ((opt = getopt (argc, argv, "hi:o:p:v:cd:s:f:")) != -1) {
+	while ((opt = getopt (argc, argv, "hi:o:p:v:cd:s:f:e:")) != -1) {
 		switch (opt) {
 			case 'h':
 				help();
@@ -1175,6 +1190,9 @@ int main(int argc, char **argv) {
 				break;
 			case 'c':
 				create_check_script = 1;
+				break;
+			case 'e':
+				video_encoder = optarg;
 				break;
 			case 'f':
 				{
@@ -1248,6 +1266,7 @@ int main(int argc, char **argv) {
 	pr->stop_after_ts = DBL_MAX;
 	pr->last_flush = 0;
 	pr->size_diff = size_diff;
+	pr->video_encoder = video_encoder;
 	
 	for (i=optind; i < argc; i++) {
 		char *end;

@@ -51,6 +51,7 @@ Options:
 
   -c              Create a shell script to check cutpoints with mpv
   -d <diff>       Accept this difference in packet sizes during packet matching
+  -e <encoder>    select video encoder by name manually
   -f <framecount> provide the approximate total frame count to show progress information
   -i <file>       Input file
   -o <file>       Output file
