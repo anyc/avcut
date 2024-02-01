@@ -2,7 +2,7 @@ name: avcut CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, winbuild ]
   pull_request:
     branches: [ master ]
 
