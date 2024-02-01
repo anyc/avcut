@@ -32,3 +32,29 @@ jobs:
       #with:
         #name: avcut-${{ steps.avcut_variables.outputs.avcut_version }}.${{ steps.avcut_variables.outputs.sha_short }}-${{ steps.avcut_variables.outputs.debarch }}
         #path: destdir
+  winbuild:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install mingw
+      run: |
+        sudo apt-get install -y mingw-w64-i686-dev mingw-w64-tools mingw-w64 pkg-config
+    - name: set variables
+      run: |
+        echo "::set-output name=avcut_version::$(make version)"
+        echo "::set-output name=sha_short::$(git rev-parse --short HEAD)"
+        echo "::set-output name=debarch::$(dpkg --print-architecture)"
+      id: avcut_variables
+    - name: fetch ffmpeg4win
+      run: |
+        wget "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2024-02-01-12-46/ffmpeg-n6.1.1-1-g61b88b4dda-win64-gpl-shared-6.1.zip"
+        unzip ffmpeg-n6.1.1-1-g61b88b4dda-win64-gpl-shared-6.1.zip
+    - name: make
+      run: PKG_CONFIG_PATH=ffmpeg-master-latest-win64-gpl-shared/lib/pkg-config/ \
+        PKG_CONFIG_SYSROOT=ffmpeg-master-latest-win64-gpl-shared/ \
+        make CROSS_COMPILE=x86_64-w64-mingw32-
+    - name: make
+      run: |
+        mkdir destdir
+        make install DESTDIR=destdir

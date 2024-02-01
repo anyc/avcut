@@ -5,9 +5,9 @@ APP=avcut
 AVCUT_VERSION=0.6
 
 ifneq ($(CROSS_COMPILE),)
-	CC?=$(CROSS_COMPILE)gcc
-	LD?=$(CROSS_COMPILE)ld
-	PKG_CONFIG?=$(CROSS_COMPILE)pkg-config
+	CC=$(CROSS_COMPILE)gcc
+	LD=$(CROSS_COMPILE)ld
+	PKG_CONFIG=$(CROSS_COMPILE)pkg-config
 else
 	PKG_CONFIG?=pkg-config
 endif
