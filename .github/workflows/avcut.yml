@@ -51,8 +51,9 @@ jobs:
         wget "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2024-02-01-12-46/ffmpeg-n6.1.1-1-g61b88b4dda-win64-gpl-shared-6.1.zip"
         unzip ffmpeg-n6.1.1-1-g61b88b4dda-win64-gpl-shared-6.1.zip
     - name: make
-      run: PKG_CONFIG_PATH=ffmpeg-master-latest-win64-gpl-shared/lib/pkg-config/ \
-        PKG_CONFIG_SYSROOT=ffmpeg-master-latest-win64-gpl-shared/ \
+      run: >
+        PKG_CONFIG_PATH=ffmpeg-master-latest-win64-gpl-shared/lib/pkg-config/ 
+        PKG_CONFIG_SYSROOT=ffmpeg-master-latest-win64-gpl-shared/ 
         make CROSS_COMPILE=x86_64-w64-mingw32-
     - name: make
       run: |
