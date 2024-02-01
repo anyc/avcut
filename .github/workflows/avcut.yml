@@ -12,7 +12,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: Install ffmpeg
+    - name: Install ffmpeg4linux
       run: |
         sudo apt-get install -y libavcodec-dev libavformat-dev libavutil-dev
     - name: set variables
@@ -20,42 +20,45 @@ jobs:
         echo "::set-output name=avcut_version::$(make version)"
         echo "::set-output name=sha_short::$(git rev-parse --short HEAD)"
         echo "::set-output name=debarch::$(dpkg --print-architecture)"
+        
+        echo "::set-output name=ffmpeg_build_date::2024-02-01-12-46"
+        echo "::set-output name=ffmpeg_name::ffmpeg-n5.1.4-2-gdd885ab2f5-win64-gpl-shared-5.1"
       id: avcut_variables
+    
+    - name: Install mingw
+      run: |
+        sudo apt-get install -y mingw-w64-i686-dev mingw-w64-tools mingw-w64 pkg-config
+    - name: fetch ffmpeg4win
+      run: |
+        wget "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-${{ steps.avcut_variables.outputs.ffmpeg_build_date }}/${{ steps.avcut_variables.outputs.ffmpeg_name }}.zip"
+        unzip ${{ steps.avcut_variables.outputs.ffmpeg_name }}.zip
+    - name: make
+      run: >
+        PKG_CONFIG_PATH=${{ steps.avcut_variables.outputs.ffmpeg_name }}/lib/pkgconfig/ 
+        PKG_CONFIG_SYSROOT=${{ steps.avcut_variables.outputs.ffmpeg_name }}/ 
+        make CROSS_COMPILE=x86_64-w64-mingw32- ;
+        ls -lsh avcut.exe;
+        mv avcut.exe avcut-${{ steps.avcut_variables.outputs.avcut_version }}.${{ steps.avcut_variables.outputs.sha_short }}.exe;
+    - name: wininfo
+      run: >
+        echo "Download: https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-${{ steps.avcut_variables.outputs.ffmpeg_build_date }}/${{ steps.avcut_variables.outputs.ffmpeg_name }}.zip" > avcut_ffmpeg_libs_url.txt;
+        echo "and put the DLLs from the bin directory into the same folder as avcut." >> avcut_ffmpeg_libs_url.txt;
+    - name: store avcut4win artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: avcut-${{ steps.avcut_variables.outputs.avcut_version }}.${{ steps.avcut_variables.outputs.sha_short }}.exe
+        path: |
+            avcut-${{ steps.avcut_variables.outputs.avcut_version }}.${{ steps.avcut_variables.outputs.sha_short }}.exe
+            avcut_ffmpeg_libs_url.txt
+    
     - name: make
       run: make
     - name: make
       run: |
         mkdir destdir
         make install DESTDIR=destdir
-    #- name: Store artifacts
-      #uses: actions/upload-artifact@v2
-      #with:
-        #name: avcut-${{ steps.avcut_variables.outputs.avcut_version }}.${{ steps.avcut_variables.outputs.sha_short }}-${{ steps.avcut_variables.outputs.debarch }}
-        #path: destdir
-  winbuild:
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v3
-    - name: Install mingw
-      run: |
-        sudo apt-get install -y mingw-w64-i686-dev mingw-w64-tools mingw-w64 pkg-config
-    - name: set variables
-      run: |
-        echo "::set-output name=avcut_version::$(make version)"
-        echo "::set-output name=sha_short::$(git rev-parse --short HEAD)"
-        echo "::set-output name=debarch::$(dpkg --print-architecture)"
-      id: avcut_variables
-    - name: fetch ffmpeg4win
-      run: |
-        wget "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2024-02-01-12-46/ffmpeg-n6.1.1-1-g61b88b4dda-win64-gpl-shared-6.1.zip"
-        unzip ffmpeg-n6.1.1-1-g61b88b4dda-win64-gpl-shared-6.1.zip
-    - name: make
-      run: >
-        PKG_CONFIG_PATH=ffmpeg-master-latest-win64-gpl-shared/lib/pkg-config/ 
-        PKG_CONFIG_SYSROOT=ffmpeg-master-latest-win64-gpl-shared/ 
-        make CROSS_COMPILE=x86_64-w64-mingw32-
-    - name: make
-      run: |
-        mkdir destdir
-        make install DESTDIR=destdir
+    - name: store avcut artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: avcut-${{ steps.avcut_variables.outputs.avcut_version }}.${{ steps.avcut_variables.outputs.sha_short }}-${{ steps.avcut_variables.outputs.debarch }}
+        path: destdir
