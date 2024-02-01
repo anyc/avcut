@@ -34,6 +34,7 @@
 #include <float.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <inttypes.h>
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
