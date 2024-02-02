@@ -41,6 +41,16 @@ Install dependencies:
 Execute `make` to start building avcut. Execute `make debug` to build avcut with
 verbose output and debug symbols.
 
+Windows executable
+------------------
+
+An experimental Windows executable is provided as part of the CI artifacts.
+This executable is dynamically linked against the ffmpeg libraries from
+[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases). The
+URL to the specific ffmpeg build is stored in the `avcut_ffmpeg_libs_url.txt`
+file. Please place the DLLs from the bin/ folder of the ffmpeg build in the same
+directory as avcut.exe.
+
 Usage
 -----
 
