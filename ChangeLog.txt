@@ -1,3 +1,10 @@
+v0.7 (2024-02-02)
+=================
+ * replaced several deprecated functions
+ * fixed AVCC to Annex-B conversion
+ * added -e parameter to manually select video encoder
+ * added experimental Windows executable as part of CI pipeline
+
 v0.6 (2022-04-11)
 =================
  * replaced deprecated av_init_packet()
