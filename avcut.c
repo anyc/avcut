@@ -161,8 +161,8 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 	
 	
 	if (frame) {
-		av_log(NULL, AV_LOG_DEBUG, "enc frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c to %f\n",
-			frame->pts, frame->best_effort_timestamp, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
+		av_log(NULL, AV_LOG_DEBUG, "enc frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " type: %c to %f\n",
+			frame->pts, frame->best_effort_timestamp, frame->pkt_dts, av_get_picture_type_char(frame->pict_type),
 			frame->pts * av_q2d(codec_ctx->time_base)
 			);
 		
@@ -355,21 +355,9 @@ char find_packet_for_frame(struct project *pr, struct packet_buffer *s, size_t f
 		// we cannot compare packet.dts with frame.pkt_dts as they differ by 2 (maybe caused by multithreading)
 		if (
 			(s->pkts[i].pts != AV_NOPTS_VALUE &&
-				s->pkts[i].pts == s->frames[frame_idx]->best_effort_timestamp) ||
-			(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == AV_NOPTS_VALUE &&
-				s->frames[frame_idx]->pkt_size == s->pkts[i].size - pr->size_diff)
+				s->pkts[i].pts == s->frames[frame_idx]->best_effort_timestamp)
 		)
 		{
-			// libav is missing pkt_size
-			if (s->frames[frame_idx]->pkt_size != s->pkts[i].size - pr->size_diff) {
-				av_log(NULL, AV_LOG_ERROR,
-						"size mismatch %zu:%d %zu:%d (diff: %lu, try: %d)\n",
-						frame_idx, s->frames[frame_idx]->pkt_size, i,
-						s->pkts[i].size, pr->size_diff,
-						s->pkts[i].size - s->frames[frame_idx]->pkt_size);
-				continue;
-			}
-			
 			*packet_idx = i;
 			
 			return 1;
@@ -380,10 +368,10 @@ char find_packet_for_frame(struct project *pr, struct packet_buffer *s, size_t f
 			frame_idx);
 	
 	for (i=0;i<s->n_pkts;i++) {
-		av_log(NULL, AV_LOG_DEBUG, "%" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " - %d %d (NOPTS: %" PRId64 ")\n",
+		av_log(NULL, AV_LOG_DEBUG, "%" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " - %d (NOPTS: %" PRId64 ")\n",
 				s->pkts[i].pts, s->pkts[i].dts, s->frames[frame_idx]->pkt_dts,
 				s->frames[frame_idx]->best_effort_timestamp,
-				s->frames[frame_idx]->pkt_size, s->pkts[i].size,
+				s->pkts[i].size,
 				AV_NOPTS_VALUE);
 	}
 	
@@ -773,19 +761,9 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			for (j=0;j<s->n_frames;j++) {
 				if (
 					(s->pkts[i].pts != AV_NOPTS_VALUE &&
-						s->pkts[i].pts == s->frames[j]->best_effort_timestamp) ||
-					(s->pkts[i].pts == AV_NOPTS_VALUE && s->pkts[i].dts == AV_NOPTS_VALUE &&
-						s->frames[j]->pkt_size == s->pkts[i].size - pr->size_diff)
+						s->pkts[i].pts == s->frames[j]->best_effort_timestamp)
 					)
 				{
-					// libav is missing pkt_size
-					if (s->frames[j]->pkt_size != s->pkts[i].size - pr->size_diff) {
-						av_log(NULL, AV_LOG_ERROR,
-							"size mismatch %zu:%d %zu:%d (diff %lu, dts %" PRId64 ")\n",
-							j, s->frames[j]->pkt_size, i, s->pkts[i].size,  - pr->size_diff, s->pkts[i].dts);
-						continue;
-					}
-					
 					frame = s->frames[j];
 					break;
 				}
@@ -795,13 +773,13 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 					"frame for pkt #%zd (dts %" PRId64 " pts %" PRId64 ") not found\n",
 					i, s->pkts[i].dts, s->pkts[i].pts);
 				
-				av_log(NULL, AV_LOG_DEBUG, "pkt_pts pkt_dts frame->pkt_dts frame->pts frame->best_eff - frame->pkt_size pkt_size - cpn\n");
+				av_log(NULL, AV_LOG_DEBUG, "pkt_pts pkt_dts frame->pkt_dts frame->pts frame->best_eff - pkt_size - cpn\n");
 				for (j=0;j<s->n_frames;j++) {
-					av_log(NULL, AV_LOG_DEBUG, "%" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " - %6d %6d - type: %c (NOPTS: %" PRId64 ")\n",
+					av_log(NULL, AV_LOG_DEBUG, "%" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " - %6d - type: %c (NOPTS: %" PRId64 ")\n",
 						s->pkts[i].pts, s->pkts[i].dts, s->frames[j]->pkt_dts,
 						s->frames[j]->pts,
 						s->frames[j]->best_effort_timestamp,
-						s->frames[j]->pkt_size, s->pkts[i].size,
+						s->pkts[i].size,
 						av_get_picture_type_char(s->frames[j]->pict_type),
 						AV_NOPTS_VALUE);
 				}
@@ -977,8 +955,8 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			}
 			
 			#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(56,56,0)
-			av_log(NULL, AV_LOG_DEBUG, "dec frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c from %f\n",
-				  frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
+			av_log(NULL, AV_LOG_DEBUG, "dec frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " type: %c from %f\n",
+				  frame->pts, frame->pkt_pts, frame->pkt_dts, av_get_picture_type_char(frame->pict_type),
 				  frame->pts*av_q2d(pr->in_fctx->streams[stream_index]->codec->time_base)
 				);
 			#endif
@@ -1022,13 +1000,13 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				)	;
 			}
 			
-			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " pkt_size: %d type: %c for %f\n",
-				frame->pts, frame->pkt_pts, frame->pkt_dts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
+			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " type: %c for %f\n",
+				frame->pts, frame->pkt_pts, frame->pkt_dts, av_get_picture_type_char(frame->pict_type),
 				frame->pts*av_q2d(pr->in_codec_ctx[stream_index]->time_base)
 				);
 			#else
-			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " pkt_size: %d type: %c for %f\n",
-				frame->pts, frame->pkt_size, av_get_picture_type_char(frame->pict_type),
+			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " type: %c for %f\n",
+				frame->pts, av_get_picture_type_char(frame->pict_type),
 				frame->pts*av_q2d(pr->in_codec_ctx[stream_index]->time_base)
 				);
 			#endif
