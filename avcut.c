@@ -1014,7 +1014,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			
 			// the first packet in the video buffer is an I frame, if the
 			// current packet contains another I frame, flush the buffer
-			if (sbuffer[stream_index].n_frames > 1 && frame->key_frame) {
+			if (sbuffer[stream_index].n_frames > 1 && (frame->flags & AV_FRAME_FLAG_KEY)) {
 				if (pr->last_flush == 1)
 					pr->stop_reading = 1;
 				
