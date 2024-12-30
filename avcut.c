@@ -199,7 +199,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		enc_pkt->stream_index = s->stream_index;
 		
 		if (enc_pkt->duration == 0) {
-			enc_pkt->duration = codec_ctx->ticks_per_frame;
+			enc_pkt->duration = av_q2d(codec_ctx->framerate) * av_q2d(codec_ctx->time_base);
 			av_packet_rescale_ts(enc_pkt, codec_ctx->time_base, ostream->time_base);
 		}
 		
@@ -451,7 +451,6 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 	
 	if (dec_cctx->codec_type == AVMEDIA_TYPE_VIDEO) {
 		enc_cctx->time_base = dec_cctx->time_base;
-		enc_cctx->ticks_per_frame = dec_cctx->ticks_per_frame;
 		enc_cctx->delay = dec_cctx->delay;
 		enc_cctx->width = dec_cctx->width;
 		enc_cctx->height = dec_cctx->height;
@@ -1498,11 +1497,9 @@ int main(int argc, char **argv) {
 		av_log(NULL, AV_LOG_DEBUG, "stream %d in:\n", i);
 		av_log(NULL, AV_LOG_DEBUG, "stream: " DUMP_TB(&pr->in_fctx->streams[i]->time_base));
 		av_log(NULL, AV_LOG_DEBUG, "codec:  " DUMP_TB(&pr->in_codec_ctx[i]->time_base));
-		av_log(NULL, AV_LOG_DEBUG, "ticks_per_frame: %d\n", pr->in_codec_ctx[i]->ticks_per_frame);
 		av_log(NULL, AV_LOG_DEBUG, "stream %d out:\n", j);
 		av_log(NULL, AV_LOG_DEBUG, "stream: " DUMP_TB(&pr->out_fctx->streams[j]->time_base));
 		av_log(NULL, AV_LOG_DEBUG, "codec:  " DUMP_TB(&pr->out_codec_ctx[j]->time_base));
-		av_log(NULL, AV_LOG_DEBUG, "ticks_per_frame: %d\n", pr->out_codec_ctx[j]->ticks_per_frame);
 	}
 	av_log(NULL, AV_LOG_DEBUG, "\n");
 	
@@ -1531,7 +1528,7 @@ int main(int argc, char **argv) {
 			
 			// use -gop_size as start for DTS and scale it from codec to stream timebase
 			newo = pr->in_codec_ctx[i]->gop_size;
-			newo = 0 - pr->out_codec_ctx[j]->ticks_per_frame *
+			newo = 0 - av_q2d(pr->out_codec_ctx[j]->framerate) * av_q2d(pr->out_codec_ctx[j]->time_base) *
 				av_rescale_q(newo, pr->out_codec_ctx[j]->time_base, pr->out_fctx->streams[j]->time_base);
 			
 			if (newo < dts_offset)
