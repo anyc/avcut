@@ -14,9 +14,13 @@ for a detailed description.
 
 _Please note:_
 
-* This is an experimental version. Please check any resulting video if
-  everything worked as intended. If you need a more mature solution, check
-  [avidemux](http://fixounet.free.fr/avidemux/).
+* This is an experimental version and it is not actively developed anymore.
+  While it works perfectly for some videos, it creates artifacts with others.
+  It looks like it depends on the used encoder and settings of the source.
+  Please check any resulting video if everything worked as intended. If you
+  need a more mature solution, check:
+    * [lossless-cut](https://mifi.no/losslesscut/)
+    * [avidemux](http://fixounet.free.fr/avidemux/).
 * You can specify an arbitrary output container that is supported by ffmpeg.
   However, avcut has only been tested with the Matroska (.mkv) container.
 
