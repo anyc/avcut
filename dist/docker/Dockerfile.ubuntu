@@ -1,0 +1,15 @@
+FROM ubuntu:26.04
+
+RUN rm -f /etc/apt/apt.conf.d/docker-clean; echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+	--mount=type=cache,target=/var/lib/apt,sharing=locked \
+	apt update && \
+	apt-get install --no-install-recommends -y git build-essential ca-certificates pkg-config && \
+	apt-get install --no-install-recommends -y libavformat-dev libavcodec-dev && \
+	apt-get clean
+
+RUN mkdir -p /work/avcut
+
+WORKDIR /work/avcut
+
+RUN make
