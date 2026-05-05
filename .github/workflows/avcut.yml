@@ -21,8 +21,8 @@ jobs:
         echo "::set-output name=sha_short::$(git rev-parse --short HEAD)"
         echo "::set-output name=debarch::$(dpkg --print-architecture)"
         
-        echo "::set-output name=ffmpeg_build_date::2024-02-01-12-46"
-        echo "::set-output name=ffmpeg_name::ffmpeg-n5.1.4-2-gdd885ab2f5-win64-gpl-shared-5.1"
+        echo "::set-output name=ffmpeg_build_date::2026-05-05-13-19"
+        echo "::set-output name=ffmpeg_name::ffmpeg-n8.1.1-win64-gpl-shared-8.1"
       id: avcut_variables
     
     - name: Install mingw
