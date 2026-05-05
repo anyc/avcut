@@ -44,7 +44,7 @@ jobs:
         echo "Download: https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-${{ steps.avcut_variables.outputs.ffmpeg_build_date }}/${{ steps.avcut_variables.outputs.ffmpeg_name }}.zip" > avcut_ffmpeg_libs_url.txt;
         echo "and put the DLLs from the bin directory into the same folder as avcut." >> avcut_ffmpeg_libs_url.txt;
     - name: store avcut4win artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: avcut-${{ steps.avcut_variables.outputs.avcut_version }}.${{ steps.avcut_variables.outputs.sha_short }}.exe
         path: |
@@ -58,7 +58,7 @@ jobs:
         mkdir destdir
         make install DESTDIR=destdir
     - name: store avcut artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: avcut-${{ steps.avcut_variables.outputs.avcut_version }}.${{ steps.avcut_variables.outputs.sha_short }}-${{ steps.avcut_variables.outputs.debarch }}
         path: destdir
