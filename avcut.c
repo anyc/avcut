@@ -742,7 +742,11 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			if (out_cctx->codec->capabilities & AV_CODEC_CAP_ENCODER_FLUSH) {
 				avcodec_flush_buffers(out_cctx);
 			} else {
+				#if (LIBAVFORMAT_VERSION_MAJOR < 61)
 				avcodec_close(out_cctx);
+				#else
+				avcodec_free_context(&out_cctx);
+				#endif
 				ret = open_encoder(pr, s->stream_index);
 				if (ret) {
 					av_log(NULL, AV_LOG_ERROR, "reopening encoder failed\n");
@@ -1647,15 +1651,25 @@ int main(int argc, char **argv) {
 		av_freep(&sbuffer[j].pkts);
 		av_freep(&sbuffer[j].frames);
 		
-		if (pr->out_codec_ctx[j] && avcodec_is_open(pr->out_codec_ctx[j]))
+		if (pr->out_codec_ctx[j] && avcodec_is_open(pr->out_codec_ctx[j])) {
+			#if (LIBAVFORMAT_VERSION_MAJOR < 61)
 			avcodec_close(pr->out_codec_ctx[j]);
+			#else
+			avcodec_free_context(&pr->out_codec_ctx[j]);
+			#endif
+		}
 	}
 	
 	for (i = 0; i < pr->in_fctx->nb_streams; i++) {
 		if (pr->in_codec_ctx[i]) {
 			av_freep(&pr->in_codec_ctx[i]->opaque);
-			if (avcodec_is_open(pr->in_codec_ctx[i]))
-				avcodec_close(pr->in_codec_ctx[i]);
+			if (avcodec_is_open(pr->in_codec_ctx[i])) {
+				#if (LIBAVFORMAT_VERSION_MAJOR < 61)
+				avcodec_close(pr->in_codec_ctx[j]);
+				#else
+				avcodec_free_context(&pr->in_codec_ctx[j]);
+				#endif
+			}
 		}
 	}
 	
