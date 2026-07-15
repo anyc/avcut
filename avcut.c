@@ -35,6 +35,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <limits.h>
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -130,6 +131,85 @@ struct codeccontext {
 	char h264_avcc_format; // flag: h264 stream with annexb = 0, or avcc = 1
 };
 
+size_t find_annexb_start_code(const uint8_t *data, size_t size, size_t offset,
+		size_t *start_code_size) {
+	size_t i;
+
+	for (i = offset; i + 3 <= size; i++) {
+		if (i + 4 <= size && data[i] == 0 && data[i + 1] == 0 &&
+			data[i + 2] == 0 && data[i + 3] == 1)
+		{
+			*start_code_size = 4;
+			return i;
+		}
+		if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1) {
+			*start_code_size = 3;
+			return i;
+		}
+	}
+
+	*start_code_size = 0;
+	return size;
+}
+
+int h264_annexb_to_avcc(AVPacket *packet) {
+	AVPacket converted = {0};
+	size_t start, start_code_size, nal_start, next, next_start_code_size;
+	size_t output_size = 0;
+	size_t output_offset = 0;
+	int ret;
+
+	start = find_annexb_start_code(packet->data, packet->size, 0, &start_code_size);
+	if (start == (size_t) packet->size)
+		return 0;
+
+	while (start < (size_t) packet->size) {
+		nal_start = start + start_code_size;
+		next = find_annexb_start_code(packet->data, packet->size, nal_start,
+				&next_start_code_size);
+		if (next > nal_start)
+			output_size += 4 + next - nal_start;
+		start = next;
+		start_code_size = next_start_code_size;
+	}
+
+	if (output_size > INT_MAX)
+		return AVERROR(EINVAL);
+	ret = av_new_packet(&converted, output_size);
+	if (ret < 0)
+		return ret;
+	ret = av_packet_copy_props(&converted, packet);
+	if (ret < 0) {
+		av_packet_unref(&converted);
+		return ret;
+	}
+
+	start = find_annexb_start_code(packet->data, packet->size, 0, &start_code_size);
+	while (start < (size_t) packet->size) {
+		size_t nal_size;
+
+		nal_start = start + start_code_size;
+		next = find_annexb_start_code(packet->data, packet->size, nal_start,
+				&next_start_code_size);
+		nal_size = next - nal_start;
+		if (nal_size > 0) {
+			converted.data[output_offset] = (nal_size >> 24) & 0xff;
+			converted.data[output_offset + 1] = (nal_size >> 16) & 0xff;
+			converted.data[output_offset + 2] = (nal_size >> 8) & 0xff;
+			converted.data[output_offset + 3] = nal_size & 0xff;
+			memcpy(converted.data + output_offset + 4,
+					packet->data + nal_start, nal_size);
+			output_offset += 4 + nal_size;
+		}
+		start = next;
+		start_code_size = next_start_code_size;
+	}
+
+	av_packet_unref(packet);
+	av_packet_move_ref(packet, &converted);
+	return 0;
+}
+
 
 
 #if (LIBAVCODEC_VERSION_MAJOR < 55) || \
@@ -200,6 +280,22 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		pr->video_frames_encoded++;
 		
 		enc_pkt->stream_index = s->stream_index;
+		if (codec_ctx->codec_id == AV_CODEC_ID_H264) {
+			unsigned int input_stream_index = pr->stream_ids[s->stream_index];
+			struct codeccontext *input_codec_data =
+					pr->in_codec_ctx[input_stream_index]->opaque;
+
+			if (input_codec_data && input_codec_data->h264_avcc_format) {
+				ret = h264_annexb_to_avcc(enc_pkt);
+				if (ret < 0) {
+					av_log(NULL, AV_LOG_ERROR,
+							"failed to convert encoded H.264 packet to AVCC: %s\n",
+							av_err2str(ret));
+					av_packet_free(&enc_pkt);
+					return ret;
+				}
+			}
+		}
 		
 		if (enc_pkt->duration <= 0) {
 			if (codec_ctx->framerate.num > 0 && codec_ctx->framerate.den > 0)
@@ -835,9 +931,6 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->stop_reading_stream = 1;
 			
 			if (ts_included(pr, ts)) {
-				AVPacket *pkt;
-				
-				
 				// rescale the frame PTS to packet PTS
 				s->pkts[i].pts = av_rescale_q(frame->pts,
 						pr->in_codec_ctx[input_stream_index]->time_base,
@@ -852,54 +945,6 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				
 				s->pkts[i].dts = s->next_dts;
 				s->next_dts += s->pkts[i].duration;
-				
-				// if the original h264 stream is in AVCC format, convert it to Annex B
-				if (pr->in_codec_ctx[input_stream_index]->opaque &&
-					((struct codeccontext*) pr->in_codec_ctx[input_stream_index]->opaque)->h264_avcc_format)
-				{
-					ret = av_bsf_send_packet(pr->bsf_h264_to_annexb, &s->pkts[i]);
-					if (ret) {
-						av_log(NULL, AV_LOG_ERROR, "error av_bsf_send_packet(bsf_h264_to_annexb): %d\n", ret);
-					}
-					
-					while (1) {
-						pkt = av_packet_alloc();
-						if (!pkt) {
-							av_log(NULL, AV_LOG_ERROR, "av_packet_alloc() failed\n");
-							exit(1);
-						}
-						
-						ret = av_bsf_receive_packet(pr->bsf_h264_to_annexb, pkt);
-						
-						if (ret == -EAGAIN) {
-							break;
-						}
-						if (ret == AVERROR_EOF)
-							break;
-						if (ret < 0) {
-							av_log(NULL, AV_LOG_ERROR, "av_bsf_receive_packet(bsf_h264_to_annexb) failed: %s\n", av_err2str(ret));
-							exit(1);
-						}
-						
-						av_log(NULL, AV_LOG_DEBUG,
-							"write v cpy pkt_size: %d pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " - frame pts %" PRId64 " - %f to %f\n",
-								pkt->size, pkt->pts, pkt->dts, frame->pts, ts,
-								pkt->pts * pr->out_fctx->streams[s->stream_index]->time_base.num /
-								(double)pr->out_fctx->streams[s->stream_index]->time_base.den
-							);
-						
-						pr->video_packets_written++;
-						ret = av_interleaved_write_frame(pr->out_fctx, pkt);
-						if (ret < 0) {
-							av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
-							exit(ret);
-						}
-						av_packet_free(&pkt);
-					}
-					if (ret == -EAGAIN) {
-						continue;
-					}
-				}
 				
 				av_log(NULL, AV_LOG_DEBUG,
 					"write v cpy pkt_size: %d pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " - frame pts %" PRId64 " - %f to %f\n",
