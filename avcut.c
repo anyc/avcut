@@ -79,7 +79,7 @@ struct packet_buffer {
 	unsigned long duration_dropped_in_pkts; // accumulated duration of dropped packets
 	
 	double next_dts; // DTS of the next packet that will be written
-	long last_pts; // store last PTS in case we're dealing with AVIs where the
+	int64_t last_pts; // store last PTS in case we're dealing with AVIs where the
 				// last two frames may have a zero DTS
 };
 
@@ -1018,11 +1018,12 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			// The last frames in some AVIs have a DTS of zero. Here, we
 			// override the PTS (copied from DTS) in such a case to provide
 			// an increasing PTS
-			if (frame->pts < sbuffer->last_pts) {
+			if (sbuffer[stream_index].last_pts != AV_NOPTS_VALUE &&
+				frame->pts < sbuffer[stream_index].last_pts) {
 				#if (LIBAVUTIL_VERSION_MAJOR >= 58)
-				int64_t new_pts = sbuffer->last_pts + av_rescale_q(frame->duration,
+				int64_t new_pts = sbuffer[stream_index].last_pts + av_rescale_q(frame->duration,
 				#else
-				int64_t new_pts = sbuffer->last_pts + av_rescale_q(frame->pkt_duration,
+				int64_t new_pts = sbuffer[stream_index].last_pts + av_rescale_q(frame->pkt_duration,
 				#endif
 					pr->in_fctx->streams[input_stream_index]->time_base,
 					pr->in_codec_ctx[input_stream_index]->time_base);
@@ -1050,7 +1051,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				);
 			#endif
 			
-			sbuffer->last_pts = frame->pts;
+			sbuffer[stream_index].last_pts = frame->pts;
 			
 			// the first packet in the video buffer is an I frame, if the
 			// current packet contains another I frame, flush the buffer
@@ -1582,6 +1583,7 @@ int main(int argc, char **argv) {
 	// set the initial DTS for each stream
 	for (j = 0; j < pr->n_stream_ids; j++) {
 		sbuffer[j].next_dts = dts_offset;
+		sbuffer[j].last_pts = AV_NOPTS_VALUE;
 	}
 	
 	// start processing the input
