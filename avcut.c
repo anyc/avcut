@@ -1659,16 +1659,13 @@ int main(int argc, char **argv) {
 	
 	// if no more packet can be read, there might be still data in the queues, hence flush them if necessary
 	for (j = 0; j < pr->n_stream_ids; j++) {
-		if (!pr->out_codec_ctx[j]->codec || !(pr->out_codec_ctx[j]->codec->capabilities & AV_CODEC_CAP_DELAY))
+		i = pr->stream_ids[j];
+		if (pr->in_fctx->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO)
 			continue;
 		
-		while (1) {
-			ret = decode_packet(pr, sbuffer, j, 0);
-			if (ret == 0)
-				break;
-			if (ret < 0)
-				return ret;
-		}
+		ret = decode_packet(pr, sbuffer, j, 0);
+		if (ret < 0 && ret != AVERROR_EOF)
+			return ret;
 	}
 	
 	av_log(NULL, AV_LOG_DEBUG, "flushing buffer...\n");
