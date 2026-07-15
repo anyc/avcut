@@ -198,10 +198,17 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		
 		enc_pkt->stream_index = s->stream_index;
 		
-		if (enc_pkt->duration == 0) {
-			enc_pkt->duration = av_q2d(codec_ctx->framerate) * av_q2d(codec_ctx->time_base);
-			av_packet_rescale_ts(enc_pkt, codec_ctx->time_base, ostream->time_base);
+		if (enc_pkt->duration <= 0) {
+			if (codec_ctx->framerate.num > 0 && codec_ctx->framerate.den > 0)
+				enc_pkt->duration = av_rescale_q(1, av_inv_q(codec_ctx->framerate),
+						codec_ctx->time_base);
+			if (enc_pkt->duration <= 0)
+				enc_pkt->duration = 1;
 		}
+
+		// Encoders return timestamps in codec time base, while the muxer expects
+		// all packet fields in the output stream time base.
+		av_packet_rescale_ts(enc_pkt, codec_ctx->time_base, ostream->time_base);
 		
 		enc_pkt->dts = s->next_dts;
 		s->next_dts += enc_pkt->duration;
@@ -458,6 +465,7 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 	
 	if (dec_cctx->codec_type == AVMEDIA_TYPE_VIDEO) {
 		enc_cctx->time_base = dec_cctx->time_base;
+		enc_cctx->framerate = dec_cctx->framerate;
 		enc_cctx->delay = dec_cctx->delay;
 		enc_cctx->width = dec_cctx->width;
 		enc_cctx->height = dec_cctx->height;
