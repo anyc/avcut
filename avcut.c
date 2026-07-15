@@ -75,6 +75,7 @@ struct packet_buffer {
 	size_t n_frames; // number of frames in .frames
 	
 	size_t length; // allocated array length of .pkts and .frames
+	uint64_t next_packet_id;
 	
 	unsigned long duration_dropped_in_pkts; // accumulated duration of dropped packets
 	
@@ -358,16 +359,33 @@ char get_buffer_processing_mode(struct project *pr, struct packet_buffer *s, uns
 	return BUF_COPY_COMPLETE;
 }
 
+char packet_matches_frame(AVPacket *packet, AVFrame *frame) {
+	#ifdef AV_CODEC_FLAG_COPY_OPAQUE
+	if (packet->opaque_ref && frame->opaque_ref &&
+		packet->opaque_ref->size == sizeof(uint64_t) &&
+		frame->opaque_ref->size == sizeof(uint64_t))
+	{
+		return !memcmp(packet->opaque_ref->data, frame->opaque_ref->data,
+				sizeof(uint64_t));
+	}
+	#endif
+
+	if (packet->pts != AV_NOPTS_VALUE &&
+		packet->pts == frame->best_effort_timestamp)
+		return 1;
+
+	if (packet->dts != AV_NOPTS_VALUE && frame->pkt_dts != AV_NOPTS_VALUE &&
+		packet->dts == frame->pkt_dts)
+		return 1;
+
+	return 0;
+}
+
 char find_packet_for_frame(struct project *pr, struct packet_buffer *s, size_t frame_idx, size_t *packet_idx) {
 	size_t i;
 	
 	for (i=0;i<s->n_pkts;i++) {
-		// we cannot compare packet.dts with frame.pkt_dts as they differ by 2 (maybe caused by multithreading)
-		if (
-			(s->pkts[i].pts != AV_NOPTS_VALUE &&
-				s->pkts[i].pts == s->frames[frame_idx]->best_effort_timestamp)
-		)
-		{
+		if (packet_matches_frame(&s->pkts[i], s->frames[frame_idx])) {
 			*packet_idx = i;
 			
 			return 1;
@@ -785,11 +803,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			// find frame for current packet to determine the PTS
 			frame = 0;
 			for (j=0;j<s->n_frames;j++) {
-				if (
-					(s->pkts[i].pts != AV_NOPTS_VALUE &&
-						s->pkts[i].pts == s->frames[j]->best_effort_timestamp)
-					)
-				{
+				if (packet_matches_frame(&s->pkts[i], s->frames[j])) {
 					frame = s->frames[j];
 					break;
 				}
@@ -1378,6 +1392,9 @@ int main(int argc, char **argv) {
 		}
 		
 		if (codec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) { // || codec_ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
+			#ifdef AV_CODEC_FLAG_COPY_OPAQUE
+			codec_ctx->flags |= AV_CODEC_FLAG_COPY_OPAQUE;
+			#endif
 			ret = avcodec_open2(codec_ctx, codec, NULL);
 			if (ret < 0) {
 				av_log(NULL, AV_LOG_ERROR, "Failed to open decoder for stream %u, error %d\n", i, ret);
@@ -1645,6 +1662,15 @@ int main(int argc, char **argv) {
 			sbuffer[stream_index].stream_index = stream_index;
 		}
 		
+		#ifdef AV_CODEC_FLAG_COPY_OPAQUE
+		packet.opaque_ref = av_buffer_alloc(sizeof(uint64_t));
+		if (!packet.opaque_ref) {
+			av_packet_unref(&packet);
+			return AVERROR(ENOMEM);
+		}
+		*((uint64_t*) packet.opaque_ref->data) = ++sbuffer[stream_index].next_packet_id;
+		#endif
+
 		memcpy(&sbuffer[stream_index].pkts[sbuffer[stream_index].n_pkts], &packet, sizeof(AVPacket));
 		sbuffer[stream_index].pkts[sbuffer[stream_index].n_pkts].stream_index = stream_index;
 		sbuffer[stream_index].n_pkts++;
