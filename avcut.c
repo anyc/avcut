@@ -187,11 +187,13 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		
 		ret = avcodec_receive_packet(codec_ctx, enc_pkt);
 		if (ret == -EAGAIN || ret == AVERROR_EOF) {
+			av_packet_free(&enc_pkt);
 			return ret;
 		}
 		
 		if (ret < 0) {
 			av_log(NULL, AV_LOG_ERROR, "avcodec_receive_packet failed: %s (%d)\n", av_err2str(ret), ret);
+			av_packet_free(&enc_pkt);
 			return ret;
 		}
 		
@@ -217,9 +219,12 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		// copy the header to the beginning of each key frame if we use a global header
 		if (codec_ctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER) {
 			ret = av_bsf_send_packet(pr->bsf_dump_extra, enc_pkt);
-			if (ret) {
+			if (ret < 0) {
 				av_log(NULL, AV_LOG_ERROR, "error av_bsf_send_packet(): %d\n", ret);
+				av_packet_free(&enc_pkt);
+				return ret;
 			}
+			av_packet_free(&enc_pkt);
 			while (1) {
 				enc_pkt2 = av_packet_alloc();
 				if (!enc_pkt2) {
@@ -230,12 +235,16 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 				ret = av_bsf_receive_packet(pr->bsf_dump_extra, enc_pkt2);
 				
 				if (ret == -EAGAIN) {
+					av_packet_free(&enc_pkt2);
 					break;
 				}
-				if (ret == AVERROR_EOF)
+				if (ret == AVERROR_EOF) {
+					av_packet_free(&enc_pkt2);
 					break;
+				}
 				if (ret < 0) {
 					av_log(NULL, AV_LOG_ERROR, "av_bsf_receive_packet() failed: %s\n", av_err2str(ret));
+					av_packet_free(&enc_pkt2);
 					exit(1);
 				}
 				
@@ -248,12 +257,10 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 				ret = av_interleaved_write_frame(pr->out_fctx, enc_pkt2);
 				if (ret < 0) {
 					av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
+					av_packet_free(&enc_pkt2);
 					return ret;
 				}
 				
-				av_frame_free(&frame);
-				// TODO av_frame_unref?
-				av_packet_free(&enc_pkt);
 				av_packet_free(&enc_pkt2);
 			}
 			if (ret == -EAGAIN) {
@@ -269,11 +276,10 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 			ret = av_interleaved_write_frame(pr->out_fctx, enc_pkt);
 			if (ret < 0) {
 				av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
+				av_packet_free(&enc_pkt);
 				return ret;
 			}
 			
-			av_frame_free(&frame);
-			// TODO av_frame_unref?
 			av_packet_free(&enc_pkt);
 		}
 	}
@@ -734,6 +740,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			
 			if (ts_included(pr, ts)) {
 				ret = encode_write_frame(pr, s, s->frames[i]);
+				av_frame_free(&s->frames[i]);
 				if (ret == -EAGAIN) {
 					// ignore, no complete pkt to write yet
 				} else
@@ -1647,6 +1654,7 @@ int main(int argc, char **argv) {
 		}
 		if (i==pr->n_stream_ids) {
 			// skip packet
+			av_packet_unref(&packet);
 			continue;
 		}
 		
