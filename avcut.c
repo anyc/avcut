@@ -282,7 +282,9 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 
 // calculate stream timestamp of frame using its PTS
 double frame_pts2ts(struct project *pr, struct packet_buffer *s, AVFrame *frame) {
-	return frame->pts * av_q2d(pr->in_codec_ctx[s->stream_index]->time_base);
+	unsigned int input_stream_index = pr->stream_ids[s->stream_index];
+
+	return frame->pts * av_q2d(pr->in_codec_ctx[input_stream_index]->time_base);
 }
 
 // check if pkt/frame at timestamp $ts shall be included
@@ -310,11 +312,12 @@ char ts_included(struct project *pr, double ts) {
 char get_buffer_processing_mode(struct project *pr, struct packet_buffer *s, unsigned long last_iframe) {
 	double buf_start, buf_end;
 	size_t i;
+	unsigned int input_stream_index = pr->stream_ids[s->stream_index];
 	
 	
 	if (!last_iframe) {
-		buf_start = s->pkts[0].pts * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base);
-		buf_end = s->pkts[s->n_pkts-1].pts * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base);
+		buf_start = s->pkts[0].pts * av_q2d(pr->in_fctx->streams[input_stream_index]->time_base);
+		buf_end = s->pkts[s->n_pkts-1].pts * av_q2d(pr->in_fctx->streams[input_stream_index]->time_base);
 	} else {
 		buf_start = frame_pts2ts(pr, s, s->frames[0]);
 		buf_end = frame_pts2ts(pr, s, s->frames[last_iframe]);
@@ -570,17 +573,18 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 	double ts;
 	size_t last_frame;
 	size_t frame_count_to_process;
+	unsigned int input_stream_index = pr->stream_ids[s->stream_index];
 	
 	
 	if (!s->pkts || s->n_pkts == 0)
 		return;
 	
-	if (pr->in_fctx->streams[s->stream_index]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) {
+	if (pr->in_fctx->streams[input_stream_index]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) {
 		// check if we can copy/drop the complete buffer or if we have to check each packet individually
 		buffer_mode = get_buffer_processing_mode(pr, s, 0);
 		
 		for (i=0;i<s->n_pkts;i++) {
-			ts = s->pkts[i].pts * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base);
+			ts = s->pkts[i].pts * av_q2d(pr->in_fctx->streams[input_stream_index]->time_base);
 			
 			if (pr->stop_after_ts < ts)
 				s->stop_reading_stream = 1;
@@ -592,10 +596,10 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->pkts[i].pts -= s->duration_dropped_in_pkts;
 				
 				// calculate duration precisely to avoid deviation between PTS and DTS
-				double dur = s->pkts[i].duration * av_q2d(pr->in_fctx->streams[s->stream_index]->time_base) /
+				double dur = s->pkts[i].duration * av_q2d(pr->in_fctx->streams[input_stream_index]->time_base) /
 							av_q2d( pr->out_fctx->streams[s->stream_index]->time_base);
 				
-				av_packet_rescale_ts(&s->pkts[i], pr->in_fctx->streams[s->stream_index]->time_base,
+				av_packet_rescale_ts(&s->pkts[i], pr->in_fctx->streams[input_stream_index]->time_base,
 								 pr->out_fctx->streams[s->stream_index]->time_base);
 				
 				#define ROUND(x) ((int64_t)((x)+0.5))
@@ -704,8 +708,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			// number of dropped frames which we calculate by rescaling from
 			// the number of dropped packets (stream- to codec timebase)
 			s->frames[i]->pts -= av_rescale_q(s->duration_dropped_in_pkts,
-						pr->in_fctx->streams[s->stream_index]->time_base,
-						pr->in_codec_ctx[s->stream_index]->time_base);
+						pr->in_fctx->streams[input_stream_index]->time_base,
+						pr->in_codec_ctx[input_stream_index]->time_base);
 			
 			if (pr->stop_after_ts < ts)
 				s->stop_reading_stream = 1;
@@ -724,8 +728,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			} else {
 				#if (LIBAVUTIL_VERSION_MAJOR >= 58)
 				s->duration_dropped_in_pkts += av_rescale_q(s->frames[i]->duration,
-						pr->in_codec_ctx[s->stream_index]->time_base,
-						pr->in_fctx->streams[s->stream_index]->time_base);
+						pr->in_codec_ctx[input_stream_index]->time_base,
+						pr->in_fctx->streams[input_stream_index]->time_base);
 				#else
 				s->duration_dropped_in_pkts += s->frames[i]->pkt_duration;
 				#endif
@@ -825,22 +829,22 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				
 				// rescale the frame PTS to packet PTS
 				s->pkts[i].pts = av_rescale_q(frame->pts,
-						pr->in_codec_ctx[s->stream_index]->time_base,
-						pr->in_fctx->streams[s->stream_index]->time_base);
+						pr->in_codec_ctx[input_stream_index]->time_base,
+						pr->in_fctx->streams[input_stream_index]->time_base);
 				
 				// now we can just substract the number of dropped packets
 				s->pkts[i].pts -= s->duration_dropped_in_pkts;
 				
 				// switch from input timebase to output timebase
-				av_packet_rescale_ts(&s->pkts[i], pr->in_fctx->streams[s->stream_index]->time_base,
+				av_packet_rescale_ts(&s->pkts[i], pr->in_fctx->streams[input_stream_index]->time_base,
 								 pr->out_fctx->streams[s->stream_index]->time_base);
 				
 				s->pkts[i].dts = s->next_dts;
 				s->next_dts += s->pkts[i].duration;
 				
 				// if the original h264 stream is in AVCC format, convert it to Annex B
-				if (pr->in_codec_ctx[s->stream_index]->opaque &&
-					((struct codeccontext*) pr->in_codec_ctx[s->stream_index]->opaque)->h264_avcc_format)
+				if (pr->in_codec_ctx[input_stream_index]->opaque &&
+					((struct codeccontext*) pr->in_codec_ctx[input_stream_index]->opaque)->h264_avcc_format)
 				{
 					ret = av_bsf_send_packet(pr->bsf_h264_to_annexb, &s->pkts[i]);
 					if (ret) {
@@ -947,22 +951,23 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 	AVPacket nullpacket = { .data = NULL, .size = 0 };
 	AVRational packet_time_base;
 	AVRational frame_time_base;
+	unsigned int input_stream_index = pr->stream_ids[stream_index];
 	
 	if (!packet)
 		packet = &nullpacket;
 	
-	mtype = pr->in_fctx->streams[stream_index]->codecpar->codec_type;
-	packet_time_base = pr->in_codec_ctx[stream_index]->pkt_timebase;
-	frame_time_base = pr->in_codec_ctx[stream_index]->time_base;
+	mtype = pr->in_fctx->streams[input_stream_index]->codecpar->codec_type;
+	packet_time_base = pr->in_codec_ctx[input_stream_index]->pkt_timebase;
+	frame_time_base = pr->in_codec_ctx[input_stream_index]->time_base;
 	if (packet_time_base.num == 0 || packet_time_base.den == 0)
-		packet_time_base = pr->in_fctx->streams[stream_index]->time_base;
+		packet_time_base = pr->in_fctx->streams[input_stream_index]->time_base;
 	
 	if (mtype == AVMEDIA_TYPE_VIDEO) {
 		av_log(NULL, AV_LOG_DEBUG, "dec packet %" PRId64 " %" PRId64 " %d\n",
 			   packet->pts, packet->dts, packet->size);
 		
 		// similar to encoding, we can send zero or one packet and get zero or more frames in return
-		ret = avcodec_send_packet(pr->in_codec_ctx[stream_index], packet);
+		ret = avcodec_send_packet(pr->in_codec_ctx[input_stream_index], packet);
 		if (ret < 0) {
 			av_log(NULL, AV_LOG_ERROR, "avcodec_send_packet() failed: %d\n", ret);
 			return ret;
@@ -974,7 +979,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				return AVERROR(ENOMEM);
 			}
 			
-			ret = avcodec_receive_frame(pr->in_codec_ctx[stream_index], frame);
+			ret = avcodec_receive_frame(pr->in_codec_ctx[input_stream_index], frame);
 			if (ret == -EAGAIN || ret == AVERROR_EOF) {
 				av_frame_free(&frame);
 				return 0;
@@ -989,7 +994,7 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(56,56,0)
 			av_log(NULL, AV_LOG_DEBUG, "dec frame pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " type: %c from %f\n",
 				  frame->pts, frame->pkt_pts, frame->pkt_dts, av_get_picture_type_char(frame->pict_type),
-				  frame->pts*av_q2d(pr->in_fctx->streams[stream_index]->codec->time_base)
+				  frame->pts*av_q2d(pr->in_fctx->streams[input_stream_index]->codec->time_base)
 				);
 			#endif
 			
@@ -1019,8 +1024,8 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 				#else
 				int64_t new_pts = sbuffer->last_pts + av_rescale_q(frame->pkt_duration,
 				#endif
-					pr->in_fctx->streams[stream_index]->time_base,
-					pr->in_codec_ctx[stream_index]->time_base);
+					pr->in_fctx->streams[input_stream_index]->time_base,
+					pr->in_codec_ctx[input_stream_index]->time_base);
 				av_log(NULL, AV_LOG_DEBUG, "adjusting frame PTS from %" PRId64 " to %" PRId64 "\n", frame->pts, new_pts);
 				frame->pts = new_pts;
 			}
@@ -1029,19 +1034,19 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			// pkt_pts is deprecated
 			if (frame->pkt_pts == AV_NOPTS_VALUE) {
 				frame->pkt_pts = av_rescale_q(frame->pts,
-						pr->in_codec_ctx[stream_index]->time_base,
-						pr->in_fctx->streams[stream_index]->time_base
+					pr->in_codec_ctx[input_stream_index]->time_base,
+					pr->in_fctx->streams[input_stream_index]->time_base
 				)	;
 			}
 			
 			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " type: %c for %f\n",
 				frame->pts, frame->pkt_pts, frame->pkt_dts, av_get_picture_type_char(frame->pict_type),
-				frame->pts*av_q2d(pr->in_codec_ctx[stream_index]->time_base)
+				frame->pts*av_q2d(pr->in_codec_ctx[input_stream_index]->time_base)
 				);
 			#else
 			av_log(NULL, AV_LOG_DEBUG, "dec frame res pts: %" PRId64 " type: %c for %f\n",
 				frame->pts, av_get_picture_type_char(frame->pict_type),
-				frame->pts*av_q2d(pr->in_codec_ctx[stream_index]->time_base)
+				frame->pts*av_q2d(pr->in_codec_ctx[input_stream_index]->time_base)
 				);
 			#endif
 			
@@ -1639,6 +1644,7 @@ int main(int argc, char **argv) {
 		}
 		
 		memcpy(&sbuffer[stream_index].pkts[sbuffer[stream_index].n_pkts], &packet, sizeof(AVPacket));
+		sbuffer[stream_index].pkts[sbuffer[stream_index].n_pkts].stream_index = stream_index;
 		sbuffer[stream_index].n_pkts++;
 		
 		// decode packet (and start flushing the buffer if necessary)
