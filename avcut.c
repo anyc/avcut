@@ -561,6 +561,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 	char buffer_mode = 0;
 	double ts;
 	size_t last_frame;
+	size_t frame_count_to_process;
 	
 	
 	if (!s->pkts || s->n_pkts == 0)
@@ -626,8 +627,10 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		// check if we can copy the complete buffer or if we have to check each packet individually
 		buffer_mode = get_buffer_processing_mode(pr, s, last_frame);
 	} else {
+		last_frame = s->n_frames ? s->n_frames-1 : 0;
 		buffer_mode = BUF_COPY_COMPLETE;
 	}
+	frame_count_to_process = last_frame + 1;
 	
 	// determine the last packet we have to look at for this GOP
 	if (last_flush) {
@@ -681,7 +684,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		char frame_written = 0;
 		
 		// check which frames will be included and encode them
-		for (i=0;i<s->n_frames-1;i++) {
+		for (i=0;i<frame_count_to_process;i++) {
 			if (!s->frames[i]) {
 				av_log(NULL, AV_LOG_ERROR, "no frame %zu\n", i);
 				exit(1);
@@ -895,7 +898,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			av_packet_unref(&s->pkts[i]);
 		}
 		
-		for (j=0;j<s->n_frames-1;j++)
+		for (j=0;j<frame_count_to_process;j++)
 			av_frame_free(&s->frames[j]);
 	} else {
 		for (i=0;i<=last_pkt;i++) {
@@ -903,7 +906,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			av_packet_unref(&s->pkts[i]);
 		}
 		
-		for (j=0;j<s->n_frames-1;j++)
+		for (j=0;j<frame_count_to_process;j++)
 			av_frame_free(&s->frames[j]);
 	}
 	
@@ -920,8 +923,12 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 	s->pkts = newpkts;
 	s->n_pkts = j;
 	
-	s->frames[0] = s->frames[s->n_frames-1];
-	s->n_frames = 1;
+	if (last_flush) {
+		s->n_frames = 0;
+	} else {
+		s->frames[0] = s->frames[s->n_frames-1];
+		s->n_frames = 1;
+	}
 }
 
 // decode a video packet and store it in the buffer
