@@ -922,11 +922,17 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 	int ret, i;
 	AVFrame *frame = NULL;
 	AVPacket nullpacket = { .data = NULL, .size = 0 };
+	AVRational packet_time_base;
+	AVRational frame_time_base;
 	
 	if (!packet)
 		packet = &nullpacket;
 	
 	mtype = pr->in_fctx->streams[stream_index]->codecpar->codec_type;
+	packet_time_base = pr->in_codec_ctx[stream_index]->pkt_timebase;
+	frame_time_base = pr->in_codec_ctx[stream_index]->time_base;
+	if (packet_time_base.num == 0 || packet_time_base.den == 0)
+		packet_time_base = pr->in_fctx->streams[stream_index]->time_base;
 	
 	if (mtype == AVMEDIA_TYPE_VIDEO) {
 		av_log(NULL, AV_LOG_DEBUG, "dec packet %" PRId64 " %" PRId64 " %d\n",
@@ -969,15 +975,17 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			
 			pr->video_packets_decoded++;
 			
-			frame->pts = frame->best_effort_timestamp;
-			
-			// if pts is set from pkt_dts (e.g., through ->best_effort_timestamp),
-			// convert from packet (/stream) to frame (/codec) time_base
-			if (frame->pts == frame->pkt_dts)
+			// best_effort_timestamp is expressed in stream time base, while avcut
+			// uses frame->pts in codec/frame time base for cut decisions.
+			if (frame->best_effort_timestamp != AV_NOPTS_VALUE) {
+				frame->pts = av_rescale_q(frame->best_effort_timestamp,
+						packet_time_base,
+						frame_time_base);
+			} else if (frame->pkt_dts != AV_NOPTS_VALUE) {
 				frame->pts = av_rescale_q(frame->pkt_dts,
-						pr->in_fctx->streams[stream_index]->time_base,
-						pr->in_codec_ctx[stream_index]->time_base
-					);
+						packet_time_base,
+						frame_time_base);
+			}
 			
 			// The last frames in some AVIs have a DTS of zero. Here, we
 			// override the PTS (copied from DTS) in such a case to provide
@@ -1331,6 +1339,7 @@ int main(int argc, char **argv) {
 			continue;
 		}
 		pr->in_codec_ctx[i] = codec_ctx;
+		codec_ctx->pkt_timebase = pr->in_fctx->streams[i]->time_base;
 		
 		if (codec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) {
 			codec_ctx->framerate = av_guess_frame_rate(pr->in_fctx, pr->in_fctx->streams[i], NULL);
