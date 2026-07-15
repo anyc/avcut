@@ -303,7 +303,6 @@ char ts_included(struct project *pr, double ts) {
 char get_buffer_processing_mode(struct project *pr, struct packet_buffer *s, unsigned long last_iframe) {
 	double buf_start, buf_end;
 	size_t i;
-	char rv;
 	
 	
 	if (!last_iframe) {
@@ -314,38 +313,39 @@ char get_buffer_processing_mode(struct project *pr, struct packet_buffer *s, uns
 		buf_end = frame_pts2ts(pr, s, s->frames[last_iframe]);
 	}
 	
-	rv = 0;
-	for (i=0; i < pr->n_cuts; i++) {
-		// check if any cutpoint lies between buffer start and end
-		if (buf_start < pr->cuts[i] && pr->cuts[i] < buf_end)
-			rv = BUF_CUT_IN_BETWEEN;
+	for (i=0; i + 1 < pr->n_cuts; i += 2) {
+		double cut_start = pr->cuts[i];
+		double cut_end = pr->cuts[i+1];
 		
-		// check if buffer lies between cutpoints
-		if (pr->cuts[i] <= buf_start && buf_end <= pr->cuts[i+1]) {
-			if (i % 2 == 0)
-				rv = BUF_DROP_COMPLETE;
-			else
-				rv = BUF_COPY_COMPLETE;
+		// The buffer range uses inclusive frame timestamps, while cut intervals
+		// are [cut_start, cut_end). Equality with cut_start therefore still
+		// overlaps the excluded range, but equality with cut_end does not.
+		if (buf_end < cut_start) {
+			av_log(NULL, AV_LOG_DEBUG, "check buffer stream %u: %f to %f -> copy\n",
+				   s->stream_index, buf_start, buf_end);
+			return BUF_COPY_COMPLETE;
 		}
 		
-		// stop this loop if further cuts lie behind current buffer
-		if (buf_end < pr->cuts[i])
-			rv = BUF_COPY_COMPLETE;
+		if (cut_end <= buf_start)
+			continue;
 		
-		if (rv)
-			break;
+		if (cut_start <= buf_start && buf_end < cut_end) {
+			av_log(NULL, AV_LOG_DEBUG, "check buffer stream %u: %f to %f -> drop\n",
+				   s->stream_index, buf_start, buf_end);
+			return BUF_DROP_COMPLETE;
+		}
+		
+		av_log(NULL, AV_LOG_DEBUG, "check buffer stream %u: %f to %f -> cut in between\n",
+			   s->stream_index, buf_start, buf_end);
+		return BUF_CUT_IN_BETWEEN;
 	}
-	
-	// if we are past all cutpoints, copy the remaining video
-	if (rv == 0)
-		rv = BUF_COPY_COMPLETE;
 	
 	av_log(NULL, AV_LOG_DEBUG, "check buffer stream %u: %f to %f -> %s\n",
 		   s->stream_index, buf_start, buf_end,
-		   (rv == BUF_COPY_COMPLETE ? "copy": (rv == BUF_DROP_COMPLETE ? "drop": "cut in between"))
+		   "copy"
 		   );
 	
-	return rv;
+	return BUF_COPY_COMPLETE;
 }
 
 char find_packet_for_frame(struct project *pr, struct packet_buffer *s, size_t frame_idx, size_t *packet_idx) {
