@@ -779,27 +779,19 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		}
 		
 		if (frame_written) {
-			// Some encoders do not like new frames after we flushed them.
-			// Hence, we restart the encoder.
+			// A drain puts the encoder into end-of-stream state. Reopen it even
+			// when it advertises flush support, as some encoders still reject the
+			// next frame after avcodec_flush_buffers().
 			AVCodecContext *out_cctx = pr->out_codec_ctx[s->stream_index];
 			
-			// if the encoder does not support a restart after a flush, we have
-			// to close and reopen the encoder
-			#ifndef AV_CODEC_CAP_ENCODER_FLUSH
-			#define AV_CODEC_CAP_ENCODER_FLUSH 0
+			#if (LIBAVFORMAT_VERSION_MAJOR < 61)
+			avcodec_close(out_cctx);
 			#endif
-			if (out_cctx->codec->capabilities & AV_CODEC_CAP_ENCODER_FLUSH) {
-				avcodec_flush_buffers(out_cctx);
-			} else {
-				#if (LIBAVFORMAT_VERSION_MAJOR < 61)
-				avcodec_close(out_cctx);
-				#endif
-				avcodec_free_context(&pr->out_codec_ctx[s->stream_index]);
-				ret = open_encoder(pr, s->stream_index);
-				if (ret) {
-					av_log(NULL, AV_LOG_ERROR, "reopening encoder failed\n");
-					exit(1);
-				}
+			avcodec_free_context(&pr->out_codec_ctx[s->stream_index]);
+			ret = open_encoder(pr, s->stream_index);
+			if (ret) {
+				av_log(NULL, AV_LOG_ERROR, "reopening encoder failed\n");
+				exit(1);
 			}
 		}
 	} else
