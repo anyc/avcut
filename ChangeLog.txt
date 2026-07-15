@@ -1,3 +1,15 @@
+v0.8 (2026-07-15)
+=================
+ * fixed timestamp and frame-duration handling around cutting points
+ * fixed GOP classification, final buffer flushing, and delayed decoder draining
+ * fixed encoder restarts and packet/frame ownership during partial reencoding
+ * fixed input/output stream mapping when streams are skipped
+ * kept copied and encoded H.264 packets in a consistent AVCC representation
+ * restored input SPS/PPS data when returning to copied GOPs
+ * added selectable B-frame strategies for locally reencoded GOPs
+ * reset container-specific codec tags when creating output streams
+ * added integration tests for cut boundaries, stream layouts, AVCC, and Annex B
+
 v0.7 (2024-02-02)
 =================
  * replaced several deprecated functions
