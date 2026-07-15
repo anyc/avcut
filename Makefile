@@ -26,7 +26,7 @@ ARCH?=$(shell gcc -dumpmachine | cut -d "-" -f1)
 PREFIX?=/usr
 
 
-.PHONY: clean install
+.PHONY: clean install test
 
 all: $(APP)
 
@@ -34,6 +34,9 @@ $(APP): avcut.c
 
 clean:
 	rm -f *.o $(APP)
+
+test: $(APP)
+	./tests/integration.sh
 
 install: $(APP)
 	mkdir -p "$(DESTDIR)$(PREFIX)/bin"

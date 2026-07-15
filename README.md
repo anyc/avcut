@@ -45,6 +45,15 @@ Install dependencies:
 Execute `make` to start building avcut. Execute `make debug` to build avcut with
 verbose output and debug symbols.
 
+Tests
+-----
+
+Execute `make test` to build avcut and run the integration test suite. The tests
+require `ffmpeg` and `ffprobe` with the `libx264` and AAC encoders available.
+They generate temporary AVCC and Annex B H.264 files, exercise partial and
+complete GOP cuts, decode the complete results, and verify output streams,
+frame counts, and durations.
+
 Windows executable
 ------------------
 
