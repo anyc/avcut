@@ -384,6 +384,7 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 	AVStream *out_stream;
 	AVCodecContext *dec_cctx, *enc_cctx;
 	const AVCodec *encoder;
+	char reopen_stream;
 	
 	
 	i = pr->stream_ids[enc_stream_idx];
@@ -393,19 +394,32 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 	
 	dec_cctx = pr->in_codec_ctx[i];
 	
-	out_stream = avformat_new_stream(pr->out_fctx, NULL);
-	if (!out_stream) {
-		av_log(NULL, AV_LOG_ERROR, "Failed allocating output stream\n");
-		return AVERROR_UNKNOWN;
+	reopen_stream = enc_stream_idx < pr->out_fctx->nb_streams;
+	if (reopen_stream) {
+		out_stream = pr->out_fctx->streams[enc_stream_idx];
+	} else {
+		out_stream = avformat_new_stream(pr->out_fctx, NULL);
+		if (!out_stream) {
+			av_log(NULL, AV_LOG_ERROR, "Failed allocating output stream\n");
+			return AVERROR_UNKNOWN;
+		}
+		
+		// NOTE setting this will cause segfaults during app cleanup later, looks
+		// like it's automatically registered
+		if (0)
+			pr->out_fctx->streams[enc_stream_idx] = out_stream;
+		
+		// copy stream metadata
+		av_dict_copy(&out_stream->metadata, pr->in_fctx->streams[i]->metadata, 0);
+		
+		ret = avcodec_parameters_copy(out_stream->codecpar, pr->in_fctx->streams[i]->codecpar);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
+			return AVERROR_UNKNOWN;
+		}
+		
+		out_stream->time_base = pr->in_fctx->streams[i]->time_base;
 	}
-	
-	// NOTE setting this will cause segfaults during app cleanup later, looks
-	// like it's automatically registered
-	if (0)
-		pr->out_fctx->streams[enc_stream_idx] = out_stream;
-	
-	// copy stream metadata
-	av_dict_copy(&out_stream->metadata, pr->in_fctx->streams[i]->metadata, 0);
 	
 	if (dec_cctx->codec_type == AVMEDIA_TYPE_VIDEO) {
 		if (!pr->video_encoder) {
@@ -434,13 +448,6 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 		av_log(NULL, AV_LOG_ERROR, "Failed to alloc video decoder context\n");
 		return AVERROR_UNKNOWN;
 	}
-	ret = avcodec_parameters_copy(out_stream->codecpar, pr->in_fctx->streams[i]->codecpar);
-	if (ret < 0) {
-		av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
-		return AVERROR_UNKNOWN;
-	}
-	
-	out_stream->time_base = pr->in_fctx->streams[i]->time_base;
 	
 	ret = avcodec_parameters_to_context(enc_cctx, out_stream->codecpar);
 	if (ret < 0) {
@@ -533,13 +540,15 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 			enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 	}
 	
-	// We have to call this here as avformat_write_header() changes the time_base
-	// and if we reopen the encoder we do not call that fct again to set the same
-	// time base as before.
-	ret = avformat_init_output(pr->out_fctx, 0);
-	if (ret < 0) {
-		av_log(NULL, AV_LOG_ERROR, "avformat_init_output failed: %s\n", av_err2str(ret));
-		return ret;
+	if (!reopen_stream) {
+		// We have to call this here as avformat_write_header() changes the
+		// time_base. On a local encoder restart, the muxer stream already
+		// exists and the output header was written with the old stream setup.
+		ret = avformat_init_output(pr->out_fctx, 0);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "avformat_init_output failed: %s\n", av_err2str(ret));
+			return ret;
+		}
 	}
 	
 	return 0;
@@ -744,9 +753,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			} else {
 				#if (LIBAVFORMAT_VERSION_MAJOR < 61)
 				avcodec_close(out_cctx);
-				#else
-				avcodec_free_context(&out_cctx);
 				#endif
+				avcodec_free_context(&pr->out_codec_ctx[s->stream_index]);
 				ret = open_encoder(pr, s->stream_index);
 				if (ret) {
 					av_log(NULL, AV_LOG_ERROR, "reopening encoder failed\n");
