@@ -965,18 +965,75 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 				s->pkts[i].dts = s->next_dts;
 				s->next_dts += s->pkts[i].duration;
 				
-				av_log(NULL, AV_LOG_DEBUG,
-					"write v cpy pkt_size: %d pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " - frame pts %" PRId64 " - %f to %f\n",
-					s->pkts[i].size, s->pkts[i].pts, s->pkts[i].dts, frame->pts, ts,
-					s->pkts[i].pts * pr->out_fctx->streams[s->stream_index]->time_base.num /
-						(double)pr->out_fctx->streams[s->stream_index]->time_base.den
-					);
-				
-				pr->video_packets_written++;
-				ret = av_interleaved_write_frame(pr->out_fctx, &s->pkts[i]);
-				if (ret < 0) {
-					av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
-					exit(ret);
+				if (pr->in_codec_ctx[input_stream_index]->opaque &&
+					((struct codeccontext*) pr->in_codec_ctx[input_stream_index]->opaque)->h264_avcc_format)
+				{
+					// Restore the input SPS/PPS on copied keyframes after a locally
+					// encoded GOP, then convert the result back to AVCC for the muxer.
+					ret = av_bsf_send_packet(pr->bsf_h264_to_annexb, &s->pkts[i]);
+					if (ret < 0) {
+						av_log(NULL, AV_LOG_ERROR,
+								"error av_bsf_send_packet(bsf_h264_to_annexb): %s\n",
+								av_err2str(ret));
+						exit(ret);
+					}
+
+					while (1) {
+						AVPacket *pkt = av_packet_alloc();
+						if (!pkt) {
+							av_log(NULL, AV_LOG_ERROR, "av_packet_alloc() failed\n");
+							exit(AVERROR(ENOMEM));
+						}
+
+						ret = av_bsf_receive_packet(pr->bsf_h264_to_annexb, pkt);
+						if (ret == -EAGAIN || ret == AVERROR_EOF) {
+							av_packet_free(&pkt);
+							break;
+						}
+						if (ret < 0) {
+							av_log(NULL, AV_LOG_ERROR,
+									"av_bsf_receive_packet(bsf_h264_to_annexb) failed: %s\n",
+									av_err2str(ret));
+							av_packet_free(&pkt);
+							exit(ret);
+						}
+
+						ret = h264_annexb_to_avcc(pkt);
+						if (ret < 0) {
+							av_log(NULL, AV_LOG_ERROR,
+									"failed to convert copied H.264 packet to AVCC: %s\n",
+									av_err2str(ret));
+							av_packet_free(&pkt);
+							exit(ret);
+						}
+
+						av_log(NULL, AV_LOG_DEBUG,
+								"write v cpy pkt_size: %d pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " - frame pts %" PRId64 " - %f to %f\n",
+								pkt->size, pkt->pts, pkt->dts, frame->pts, ts,
+								pkt->pts * pr->out_fctx->streams[s->stream_index]->time_base.num /
+									(double)pr->out_fctx->streams[s->stream_index]->time_base.den);
+
+						pr->video_packets_written++;
+						ret = av_interleaved_write_frame(pr->out_fctx, pkt);
+						av_packet_free(&pkt);
+						if (ret < 0) {
+							av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
+							exit(ret);
+						}
+					}
+				} else {
+					av_log(NULL, AV_LOG_DEBUG,
+						"write v cpy pkt_size: %d pkt_pts: %" PRId64 " pkt_dts: %" PRId64 " - frame pts %" PRId64 " - %f to %f\n",
+						s->pkts[i].size, s->pkts[i].pts, s->pkts[i].dts, frame->pts, ts,
+						s->pkts[i].pts * pr->out_fctx->streams[s->stream_index]->time_base.num /
+							(double)pr->out_fctx->streams[s->stream_index]->time_base.den);
+
+					pr->video_packets_written++;
+					ret = av_interleaved_write_frame(pr->out_fctx, &s->pkts[i]);
+					if (ret < 0) {
+						av_log(NULL, AV_LOG_ERROR, "error while writing packet, error %d\n", ret);
+						exit(ret);
+					}
 				}
 			} else {
 				s->duration_dropped_in_pkts += s->pkts[i].duration;
