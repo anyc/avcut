@@ -120,6 +120,10 @@ printf '%s\n' 'Generating H.264 fixtures...'
 	-map 0:v -map 1:a -c:v libx264 -g 50 -bf 3 -c:a aac \
 	-f mpegts "$WORKDIR/annexb.ts"
 
+"$FFMPEG" -hide_banner -loglevel error -y \
+	-f lavfi -i testsrc2=size=320x180:rate=25:duration=6 \
+	-c:v libx264 -g 50 -bf 0 -an "$WORKDIR/no-bframes.mp4"
+
 printf '%s\n' 'Testing no-cut passthrough...'
 run_avcut no-cut -i "$WORKDIR/standard.mkv" \
 	-o "$WORKDIR/no-cut.mkv"
@@ -135,6 +139,14 @@ assert_clean_decode standard "$WORKDIR/standard-cut.mkv"
 assert_streams standard "$WORKDIR/standard-cut.mkv" "$(printf 'video\naudio')"
 assert_frame_count standard "$WORKDIR/standard-cut.mkv" 115
 assert_duration standard "$WORKDIR/standard-cut.mkv" 4.60 4.70
+
+printf '%s\n' 'Testing input without B-frames...'
+run_avcut no-bframes -i "$WORKDIR/no-bframes.mp4" \
+	-o "$WORKDIR/no-bframes-cut.mkv" 1.3 2.7
+assert_clean_decode no-bframes "$WORKDIR/no-bframes-cut.mkv"
+assert_streams no-bframes "$WORKDIR/no-bframes-cut.mkv" video
+assert_frame_count no-bframes "$WORKDIR/no-bframes-cut.mkv" 115
+assert_video_span no-bframes "$WORKDIR/no-bframes-cut.mkv" 4.55 4.65
 
 printf '%s\n' 'Testing skipped leading stream mapping...'
 run_avcut skipped-stream -i "$WORKDIR/audio-first.mkv" \

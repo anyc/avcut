@@ -44,6 +44,18 @@
 
 #define AVCUT_DUMP_CHAR(var, length) { size_t i; for (i=0; i<(length); i++) { printf("%x ", ((char*) (var))[i]); } printf("\n"); }
 
+#define AVCUT_BFRAME_STRATEGY_DISABLE_ALL 0
+#define AVCUT_BFRAME_STRATEGY_MATCH_INPUT 1
+
+#ifndef AVCUT_BFRAME_STRATEGY
+#define AVCUT_BFRAME_STRATEGY AVCUT_BFRAME_STRATEGY_DISABLE_ALL
+#endif
+
+#if AVCUT_BFRAME_STRATEGY != AVCUT_BFRAME_STRATEGY_DISABLE_ALL && \
+	AVCUT_BFRAME_STRATEGY != AVCUT_BFRAME_STRATEGY_MATCH_INPUT
+#error "invalid AVCUT_BFRAME_STRATEGY"
+#endif
+
 #if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(55,28,1)
 #define av_frame_alloc avcodec_alloc_frame
 #define av_frame_free avcodec_free_frame
@@ -620,11 +632,16 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 			enc_cctx->max_qdiff = 4;
 		}
 		
-		if (dec_cctx->has_b_frames) {
-			enc_cctx->max_b_frames = 3;
-			if (pr->has_b_frames < dec_cctx->has_b_frames)
-				pr->has_b_frames = dec_cctx->has_b_frames;
-		}
+		if (dec_cctx->has_b_frames && pr->has_b_frames < dec_cctx->has_b_frames)
+			pr->has_b_frames = dec_cctx->has_b_frames;
+
+		#if AVCUT_BFRAME_STRATEGY == AVCUT_BFRAME_STRATEGY_MATCH_INPUT
+		enc_cctx->max_b_frames = dec_cctx->has_b_frames ? 3 : 0;
+		#else
+		// Locally encoded packets are inserted between copied GOPs, so avoiding
+		// frame reordering is the safest way to preserve DTS continuity.
+		enc_cctx->max_b_frames = 0;
+		#endif
 // 		enc_cctx->keyint_min = 200;
 // 		enc_cctx->gop_size = 250;
 		enc_cctx->thread_count = 1; // spawning more threads causes avcodec_close to free threads multiple times

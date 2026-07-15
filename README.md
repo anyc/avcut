@@ -54,6 +54,13 @@ They generate temporary AVCC and Annex B H.264 files, exercise partial and
 complete GOP cuts, decode the complete results, and verify output streams,
 frame counts, and durations.
 
+By default, avcut disables B-frames in locally reencoded GOPs to keep DTS
+continuous where encoded and copied packets meet. Define
+`AVCUT_BFRAME_STRATEGY` as `AVCUT_BFRAME_STRATEGY_MATCH_INPUT` at compile time
+to permit B-frames when the input stream contains them:
+
+`make AVCUT_BFRAME_STRATEGY=AVCUT_BFRAME_STRATEGY_MATCH_INPUT`
+
 Windows executable
 ------------------
 
