@@ -1025,6 +1025,12 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 						packet_time_base,
 						frame_time_base);
 			}
+			#if (LIBAVUTIL_VERSION_MAJOR >= 58)
+			if (frame->duration > 0)
+				frame->duration = av_rescale_q(frame->duration,
+						packet_time_base,
+						frame_time_base);
+			#endif
 			
 			// The last frames in some AVIs have a DTS of zero. Here, we
 			// override the PTS (copied from DTS) in such a case to provide
@@ -1032,12 +1038,12 @@ int decode_packet(struct project *pr, struct packet_buffer *sbuffer, unsigned in
 			if (sbuffer[stream_index].last_pts != AV_NOPTS_VALUE &&
 				frame->pts < sbuffer[stream_index].last_pts) {
 				#if (LIBAVUTIL_VERSION_MAJOR >= 58)
-				int64_t new_pts = sbuffer[stream_index].last_pts + av_rescale_q(frame->duration,
+				int64_t new_pts = sbuffer[stream_index].last_pts + frame->duration;
 				#else
 				int64_t new_pts = sbuffer[stream_index].last_pts + av_rescale_q(frame->pkt_duration,
-				#endif
 					pr->in_fctx->streams[input_stream_index]->time_base,
 					pr->in_codec_ctx[input_stream_index]->time_base);
+				#endif
 				av_log(NULL, AV_LOG_DEBUG, "adjusting frame PTS from %" PRId64 " to %" PRId64 "\n", frame->pts, new_pts);
 				frame->pts = new_pts;
 			}
