@@ -782,10 +782,8 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 			// A drain puts the encoder into end-of-stream state. Reopen it even
 			// when it advertises flush support, as some encoders still reject the
 			// next frame after avcodec_flush_buffers().
-			AVCodecContext *out_cctx = pr->out_codec_ctx[s->stream_index];
-			
 			#if (LIBAVFORMAT_VERSION_MAJOR < 61)
-			avcodec_close(out_cctx);
+			avcodec_close(pr->out_codec_ctx[s->stream_index]);
 			#endif
 			avcodec_free_context(&pr->out_codec_ctx[s->stream_index]);
 			ret = open_encoder(pr, s->stream_index);
