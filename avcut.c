@@ -547,6 +547,8 @@ int open_encoder(struct project *pr, unsigned int enc_stream_idx) {
 			av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters to decoder context\n");
 			return AVERROR_UNKNOWN;
 		}
+		// Container-specific input tags may be invalid for the output muxer.
+		out_stream->codecpar->codec_tag = 0;
 		
 		out_stream->time_base = pr->in_fctx->streams[i]->time_base;
 	}
